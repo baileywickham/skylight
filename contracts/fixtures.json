@@ -1,9 +1,12 @@
 {
   "requests": [
     { "method": "list_apps", "params": {}, "line": "{\"id\":1,\"method\":\"list_apps\",\"params\":{}}" },
+    { "method": "list_windows", "params": { "app": "Notes" }, "line": "{\"id\":1,\"method\":\"list_windows\",\"params\":{\"app\":\"Notes\"}}" },
     { "method": "get_app_state", "params": { "app": "Notes" }, "line": "{\"id\":1,\"method\":\"get_app_state\",\"params\":{\"app\":\"Notes\"}}" },
     { "method": "get_app_state", "params": { "app": "Notes", "disableDiff": true, "include_data_url": true }, "line": "{\"id\":1,\"method\":\"get_app_state\",\"params\":{\"app\":\"Notes\",\"disableDiff\":true,\"include_data_url\":true}}" },
+    { "method": "get_app_state", "params": { "app": "Notes", "window_id": 4242 }, "line": "{\"id\":1,\"method\":\"get_app_state\",\"params\":{\"app\":\"Notes\",\"window_id\":4242}}" },
     { "method": "click", "params": { "app": "Notes", "element_index": 12 }, "line": "{\"id\":1,\"method\":\"click\",\"params\":{\"app\":\"Notes\",\"element_index\":12}}" },
+    { "method": "click", "params": { "app": "Notes", "element_index": 12, "background": true }, "line": "{\"id\":1,\"method\":\"click\",\"params\":{\"app\":\"Notes\",\"element_index\":12,\"background\":true}}" },
     { "method": "click", "params": { "app": "Notes", "x": 100, "y": 200, "mouse_button": "right", "click_count": 2 }, "line": "{\"id\":1,\"method\":\"click\",\"params\":{\"app\":\"Notes\",\"x\":100,\"y\":200,\"mouse_button\":\"right\",\"click_count\":2}}" },
     { "method": "press_key", "params": { "app": "Notes", "keys": "Cmd+Shift+t" }, "line": "{\"id\":1,\"method\":\"press_key\",\"params\":{\"app\":\"Notes\",\"keys\":\"Cmd+Shift+t\"}}" },
     { "method": "type_text", "params": { "app": "Notes", "text": "hello" }, "line": "{\"id\":1,\"method\":\"type_text\",\"params\":{\"app\":\"Notes\",\"text\":\"hello\"}}" },
@@ -15,7 +18,9 @@
   ],
   "responses": [
     { "name": "list_apps", "decodes_to": "ListAppsResult", "json": { "apps": [{ "name": "Notes", "bundle_id": "com.apple.Notes", "pid": 501, "is_frontmost": true, "launch_date": "2026-07-09T10:00:00Z" }] } },
+    { "name": "list_windows", "decodes_to": "ListWindowsResult", "json": { "windows": [{ "window_id": 4242, "title": "Untitled", "is_focused": true, "is_minimized": false }] } },
     { "name": "app_state", "decodes_to": "AppState", "json": { "text": "[0] AXWindow \"Untitled\"", "screenshot": { "url": "file:///x/shot.png", "width": 1600, "height": 1000 }, "diffed": false } },
+    { "name": "app_state_ax_only", "decodes_to": "AppState", "json": { "text": "[0] AXWindow \"Untitled\"", "screenshot_error": "permission_denied: Screen Recording not granted", "diffed": true } },
     { "name": "action", "decodes_to": "ActionResult", "json": { "done": true } }
   ],
   "json_values": [

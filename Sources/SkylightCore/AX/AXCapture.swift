@@ -75,19 +75,32 @@ public func needsWebAreaRetry(enablementJustApplied: Bool, lines: [TreeLine]) ->
     enablementJustApplied && !lines.contains { $0.text.contains("AXWebArea") }
 }
 
+/// Window-aware diff gate: diff only against a baseline from the SAME window.
+/// When either window id is unknown (private bridge unavailable) fall back to
+/// the original per-app behavior — better an occasional cross-window diff on
+/// bridge-less machines than never diffing at all there.
+public func canDiff(disableDiff: Bool, hasPrevious: Bool,
+                    previousWindowID: Int?, currentWindowID: Int?) -> Bool {
+    guard !disableDiff, hasPrevious else { return false }
+    guard let prev = previousWindowID, let cur = currentWindowID else { return true }
+    return prev == cur
+}
+
 public struct CaptureResult {
     public let text: String
     public let lines: [TreeLine]
     public let window: AXUIElement
     public let geometry: CaptureGeometry
+    public let windowID: Int?
     public let diffed: Bool
 
     public init(text: String, lines: [TreeLine], window: AXUIElement,
-                geometry: CaptureGeometry, diffed: Bool) {
+                geometry: CaptureGeometry, windowID: Int?, diffed: Bool) {
         self.text = text
         self.lines = lines
         self.window = window
         self.geometry = geometry
+        self.windowID = windowID
         self.diffed = diffed
     }
 }
@@ -97,6 +110,7 @@ public struct CaptureResult {
 final class AppCaptureState {
     let map = ElementIndexMap()
     var previousLines: [TreeLine]?
+    var previousWindowID: Int?
     var latestGeometry: CaptureGeometry?
     var enablementDone = false
 }
@@ -124,6 +138,17 @@ public final class AXCapture {
         return fresh
     }
 
+    /// kAXWindowsAttribute → [AXUIElement]. CFTypeID is the only runtime-correct
+    /// filter for CF types; `is AXUIElement` is vacuously true (see LiveAXNode).
+    private func windowElements(of appElement: AXUIElement) -> [AXUIElement] {
+        (axAttribute(appElement, kAXWindowsAttribute) as CFArray?)
+            .map { cfArray -> [AXUIElement] in
+                let array = cfArray as [AnyObject]
+                return array.filter { CFGetTypeID($0) == AXUIElementGetTypeID() }
+                    .map { unsafeDowncast($0, to: AXUIElement.self) }
+            } ?? []
+    }
+
     public func focusedWindow(of app: NSRunningApplication) throws -> AXUIElement {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
@@ -133,14 +158,7 @@ public final class AXCapture {
         if let main: AXUIElement = axAttribute(appElement, kAXMainWindowAttribute) {
             return main
         }
-        let windows: [AXUIElement] = (axAttribute(appElement, kAXWindowsAttribute) as CFArray?)
-            .map { cfArray -> [AXUIElement] in
-                // See children in LiveAXNode: CFTypeID is the only runtime-correct
-                // filter for CF types; `is AXUIElement` is vacuously true.
-                let array = cfArray as [AnyObject]
-                return array.filter { CFGetTypeID($0) == AXUIElementGetTypeID() }
-                    .map { unsafeDowncast($0, to: AXUIElement.self) }
-            } ?? []
+        let windows = windowElements(of: appElement)
         guard let first = windows.first else {
             throw SkyServiceError(code: .noFocusedWindow,
                                   message: "\(app.localizedName ?? "app") has no focused window")
@@ -160,7 +178,7 @@ public final class AXCapture {
     /// saw, and the next diff would silently omit the intervening changes.
     /// (The sticky ElementIndexMap does advance during the walk; indices are
     /// monotonic, so that is safe regardless of response delivery.)
-    public func capture(app: NSRunningApplication, disableDiff: Bool) throws -> CaptureResult {
+    public func capture(app: NSRunningApplication, windowID: Int? = nil, disableDiff: Bool) throws -> CaptureResult {
         guard Permissions.status().accessibility else {
             let instructions = Permissions.instructions(
                 for: PermissionStatus(accessibility: false, screen_recording: true))
@@ -187,7 +205,17 @@ public final class AXCapture {
             usleep(300_000) // settle before the first real walk
         }
 
-        let window = try focusedWindow(of: app)
+        let window: AXUIElement
+        if let id = windowID {
+            guard let match = try windowListings(of: app).first(where: { $0.info.window_id == id }) else {
+                throw SkyServiceError(code: .noFocusedWindow,
+                                      message: "window_id \(id) not found for '\(app.localizedName ?? "app")' — call list_windows for current ids")
+            }
+            window = match.element
+        } else {
+            window = try focusedWindow(of: app)
+        }
+        let currentWindowID = axWindowID(of: window).map { Int($0) }
         let geometry = try captureGeometry(for: window)
         var serialized = AXTreeSerializer(caps: caps).serialize(root: LiveAXNode(element: window), map: s.map)
         // Right after enablement Chromium can take a while (>1s cold, verified
@@ -207,9 +235,12 @@ public final class AXCapture {
         }
 
         // Milestone 2: diff-by-default on the sticky index map; disableDiff honored.
+        // M3: window-aware — a window change forces a full tree (see canDiff).
         let outputText: String
         let diffed: Bool
-        if !disableDiff, let previous = s.previousLines {
+        if canDiff(disableDiff: disableDiff, hasPrevious: s.previousLines != nil,
+                   previousWindowID: s.previousWindowID, currentWindowID: currentWindowID),
+           let previous = s.previousLines {
             outputText = diffTrees(previous: previous, current: serialized.lines)
             diffed = true
         } else {
@@ -217,8 +248,38 @@ public final class AXCapture {
             diffed = false
         }
 
-        return CaptureResult(text: outputText, lines: serialized.lines,
-                             window: window, geometry: geometry, diffed: diffed)
+        return CaptureResult(text: outputText, lines: serialized.lines, window: window,
+                             geometry: geometry, windowID: currentWindowID, diffed: diffed)
+    }
+
+    /// One entry per AX window of the app, with the wire-facing WindowInfo and
+    /// the live element (used by window_id-targeted capture). Ordered as the
+    /// app reports kAXWindowsAttribute.
+    public struct WindowListing {
+        public let element: AXUIElement
+        public let info: WindowInfo
+    }
+
+    public func windowListings(of app: NSRunningApplication) throws -> [WindowListing] {
+        guard Permissions.status().accessibility else {
+            let instructions = Permissions.instructions(
+                for: PermissionStatus(accessibility: false, screen_recording: true))
+            throw SkyServiceError(code: .permissionDenied,
+                                  message: instructions.joined(separator: " "))
+        }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
+        let focused: AXUIElement? = axAttribute(appElement, kAXFocusedWindowAttribute)
+        let wins = windowElements(of: appElement)
+        return wins.map { w in
+            let minimized: NSNumber? = axAttribute(w, kAXMinimizedAttribute)
+            let title: String? = axAttribute(w, kAXTitleAttribute)
+            return WindowListing(element: w, info: WindowInfo(
+                window_id: axWindowID(of: w).map { Int($0) },
+                title: title.map { sanitizeAXText($0) },
+                is_focused: focused.map { CFEqual($0, w) } ?? false,
+                is_minimized: minimized?.boolValue ?? false))
+        }
     }
 
     /// Commits a capture as the new diff baseline (and coordinate geometry)
@@ -229,6 +290,7 @@ public final class AXCapture {
     public func commitBaseline(_ result: CaptureResult, forPid pid: pid_t) {
         let s = state(for: pid)
         s.previousLines = result.lines
+        s.previousWindowID = result.windowID
         s.latestGeometry = result.geometry
     }
 
@@ -254,5 +316,12 @@ public final class AXCapture {
 
     public func latestGeometry(forPid pid: pid_t) -> CaptureGeometry? {
         stateByPid[pid]?.latestGeometry
+    }
+
+    /// Window id of the last committed capture for `pid` (nil if none or the
+    /// bridge couldn't resolve one). Coordinate actions raise THIS window so
+    /// events land where the geometry says they will.
+    public func latestWindowID(forPid pid: pid_t) -> Int? {
+        stateByPid[pid]?.previousWindowID
     }
 }

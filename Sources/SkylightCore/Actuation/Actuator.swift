@@ -51,19 +51,25 @@ public final class Actuator {
     private let capture: AXCapture
     private let postActionSleepMs: Int
     private let pauseFile: URL
-    /// Background mode (SKYLIGHT_BACKGROUND=1): never activate the target app,
-    /// and deliver synthetic events per-pid so actions don't steal the user's
-    /// focus. Default OFF = the activation-first behavior, unchanged.
-    private let background: Bool
+    /// Daemon-wide default (SKYLIGHT_BACKGROUND=1). Each action may override
+    /// per request via its optional `background` field.
+    private let defaultBackground: Bool
+    private let approvals: Approvals
 
     public init(registry: AppRegistry, capture: AXCapture,
                 postActionSleepMs: Int = 100, pauseFile: URL = SkylightPaths.pauseFile,
-                background: Bool = false) {
+                background: Bool = false, approvals: Approvals = Approvals()) {
         self.registry = registry
         self.capture = capture
         self.postActionSleepMs = postActionSleepMs
         self.pauseFile = pauseFile
-        self.background = background
+        self.defaultBackground = background
+        self.approvals = approvals
+    }
+
+    /// Per-request override wins; absent falls back to the daemon default.
+    public func effectiveBackground(_ override: Bool?) -> Bool {
+        override ?? defaultBackground
     }
 
     // MARK: - Shared plumbing
@@ -96,6 +102,14 @@ public final class Actuator {
         }
     }
 
+    /// Resolve + approval-gate in one step; every action targets apps only
+    /// through this, so the allowlist cannot be bypassed.
+    private func resolveApproved(_ identifier: String) throws -> NSRunningApplication {
+        let app = try registry.resolve(identifier)
+        try approvals.check(name: app.localizedName, bundleID: app.bundleIdentifier)
+        return app
+    }
+
     private func mouseButton(_ name: String?) throws -> (button: CGMouseButton, down: CGEventType, up: CGEventType, drag: CGEventType) {
         switch name ?? "left" {
         case "left": return (.left, .leftMouseDown, .leftMouseUp, .leftMouseDragged)
@@ -108,9 +122,18 @@ public final class Actuator {
     /// Resolves app + raised window; geometry from the latest capture for coordinate math.
     /// Geometry is checked BEFORE the live focusedWindow AX call so a missing
     /// prior capture fails fast with invalid_params without touching AX.
+    ///
+    /// When `needsGeometry` is true, the window we raise MUST be the same
+    /// window the geometry came from — get_app_state can target a specific
+    /// window_id, and a stale `focusedWindow(of:)` lookup here would raise a
+    /// different window than the one coordinates were computed against,
+    /// landing the click/drag in the wrong place. So we resolve the window
+    /// that produced the committed geometry (via its window_id) and fall
+    /// back to the live focused window only if that id is nil or no longer
+    /// resolves (e.g. the window closed).
     private func target(_ appIdentifier: String, needsGeometry: Bool) throws
         -> (app: NSRunningApplication, window: AXUIElement, geometry: CaptureGeometry?) {
-        let app = try registry.resolve(appIdentifier)
+        let app = try resolveApproved(appIdentifier)
         var geometry: CaptureGeometry?
         if needsGeometry {
             guard let g = capture.latestGeometry(forPid: app.processIdentifier) else {
@@ -118,6 +141,10 @@ public final class Actuator {
                                       message: "no prior capture for '\(appIdentifier)' — coordinates are screenshot pixels; call get_app_state first")
             }
             geometry = g
+        }
+        if needsGeometry, let windowID = capture.latestWindowID(forPid: app.processIdentifier),
+           let listing = try? capture.windowListings(of: app).first(where: { $0.info.window_id == windowID }) {
+            return (app, listing.element, geometry)
         }
         let window = try capture.focusedWindow(of: app)
         return (app, window, geometry)
@@ -127,7 +154,7 @@ public final class Actuator {
     /// events land in it and post-action screenshots are unobscured. In
     /// background mode this is a no-op for EVERY action — AX element actions
     /// need no focus at all, and synthetic events are routed per-pid instead.
-    private func raiseUnlessBackground(app: NSRunningApplication, window: AXUIElement) {
+    private func raiseUnlessBackground(app: NSRunningApplication, window: AXUIElement, background: Bool) {
         guard shouldActivate(background: background) else { return }
         activateAndRaise(app: app, window: window)
     }
@@ -138,7 +165,7 @@ public final class Actuator {
     /// (best-effort, see Activation.swift): menu key equivalents usually won't
     /// fire in a non-frontmost app, and Chromium/Electron apps can mishandle
     /// input while inactive.
-    private func post(_ event: CGEvent?, pid: pid_t) {
+    private func post(_ event: CGEvent?, pid: pid_t, background: Bool) {
         switch eventDestination(background: background, targetPid: pid) {
         case .session: event?.post(tap: .cghidEventTap)
         case .pid(let pid): event?.postToPid(pid)
@@ -149,17 +176,18 @@ public final class Actuator {
 
     public func click(_ input: ClickInput) throws -> ActionResult {
         try guardNotPaused()
+        let background = effectiveBackground(input.background)
         _ = try mouseButton(input.mouse_button) // validate early
         if let index = input.element_index {
-            let app = try registry.resolve(input.app)
+            let app = try resolveApproved(input.app)
             let element = try capture.element(forIndex: index, appPid: app.processIdentifier)
             let window = try capture.focusedWindow(of: app)
-            raiseUnlessBackground(app: app, window: window) // unobscured post-action screenshots
+            raiseUnlessBackground(app: app, window: window, background: background) // unobscured post-action screenshots
             let err = AXUIElementPerformAction(element, kAXPressAction as CFString)
             guard err == .success else { throw mapAXError(err, action: "click[\(index)]") }
         } else if let x = input.x, let y = input.y {
             let (app, window, geometry) = try target(input.app, needsGeometry: true)
-            raiseUnlessBackground(app: app, window: window)
+            raiseUnlessBackground(app: app, window: window, background: background)
             let point = globalPoint(fromScreenshotX: x, y: y, geometry: geometry!)
             let (button, down, up, _) = try mouseButton(input.mouse_button)
             let clicks = input.click_count ?? 1
@@ -168,8 +196,8 @@ public final class Actuator {
                 let upEvent = CGEvent(mouseEventSource: nil, mouseType: up, mouseCursorPosition: point, mouseButton: button)
                 downEvent?.setIntegerValueField(.mouseEventClickState, value: Int64(i))
                 upEvent?.setIntegerValueField(.mouseEventClickState, value: Int64(i))
-                post(downEvent, pid: app.processIdentifier)
-                post(upEvent, pid: app.processIdentifier)
+                post(downEvent, pid: app.processIdentifier, background: background)
+                post(upEvent, pid: app.processIdentifier, background: background)
             }
         } else {
             throw SkyServiceError(code: .invalidParams, message: "click needs element_index or x+y")
@@ -180,9 +208,10 @@ public final class Actuator {
 
     public func pressKey(_ input: PressKeyInput) throws -> ActionResult {
         try guardNotPaused()
+        let background = effectiveBackground(input.background)
         let chord = try parseKeyChord(input.keys)
         let (app, window, _) = try target(input.app, needsGeometry: false)
-        raiseUnlessBackground(app: app, window: window)
+        raiseUnlessBackground(app: app, window: window, background: background)
         // The chord parse yields ANSI key codes; remap character keys to the
         // ACTIVE keyboard layout (on e.g. Dvorak the ANSI "c" code types "j",
         // so Cmd+c would fire an unbound shortcut and silently no-op).
@@ -200,7 +229,7 @@ public final class Actuator {
                 event?.type = .flagsChanged
             }
             event?.flags = step.flags
-            post(event, pid: app.processIdentifier)
+            post(event, pid: app.processIdentifier, background: background)
             usleep(5_000) // real chords have inter-key spacing; keeps order stable
         }
         postActionSleep()
@@ -209,8 +238,9 @@ public final class Actuator {
 
     public func typeText(_ input: TypeTextInput) throws -> ActionResult {
         try guardNotPaused()
+        let background = effectiveBackground(input.background)
         let (app, window, _) = try target(input.app, needsGeometry: false)
-        raiseUnlessBackground(app: app, window: window)
+        raiseUnlessBackground(app: app, window: window, background: background)
         // Unicode key events into current focus, ~20 UTF-16 units per event
         // (surrogate pairs are never split across events; see utf16Chunks).
         for chunk in utf16Chunks(input.text) {
@@ -218,8 +248,8 @@ public final class Actuator {
             let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
             down?.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
             up?.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
-            post(down, pid: app.processIdentifier)
-            post(up, pid: app.processIdentifier)
+            post(down, pid: app.processIdentifier, background: background)
+            post(up, pid: app.processIdentifier, background: background)
             usleep(5_000) // keep event order stable for fast typists
         }
         postActionSleep()
@@ -228,6 +258,7 @@ public final class Actuator {
 
     public func scroll(_ input: ScrollInput) throws -> ActionResult {
         try guardNotPaused()
+        let background = effectiveBackground(input.background)
         let vertical: Bool
         let sign: Double
         switch input.direction {
@@ -237,10 +268,10 @@ public final class Actuator {
         case "right": vertical = false; sign = -1
         default: throw SkyServiceError(code: .invalidParams, message: "direction must be up|down|left|right")
         }
-        let app = try registry.resolve(input.app)
+        let app = try resolveApproved(input.app)
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
-        raiseUnlessBackground(app: app, window: window)
+        raiseUnlessBackground(app: app, window: window, background: background)
 
         // Move the cursor over the element's VISIBLE center, then post pixel
         // scrolls of one visible-height/width per page. Scrollable content
@@ -254,7 +285,7 @@ public final class Actuator {
             .map { visibleScrollFrame(elementFrame: elementFrame, windowFrame: $0) } ?? elementFrame
         let center = CGPoint(x: frame.midX, y: frame.midY)
         post(CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: center, mouseButton: .left),
-             pid: app.processIdentifier)
+             pid: app.processIdentifier, background: background)
         usleep(50_000) // let the pointer move settle before the wheel events
         let total = Int32((vertical ? frame.height : frame.width) * sign * input.pages)
         let source = CGEventSource(stateID: .hidSystemState)
@@ -262,7 +293,7 @@ public final class Actuator {
             let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 1,
                                 wheel1: vertical ? delta : 0, wheel2: vertical ? 0 : delta, wheel3: 0)
             event?.location = center // route by the clamped point, immune to cursor races
-            post(event, pid: app.processIdentifier)
+            post(event, pid: app.processIdentifier, background: background)
             usleep(10_000)
         }
         postActionSleep()
@@ -271,10 +302,11 @@ public final class Actuator {
 
     public func setValue(_ input: SetValueInput) throws -> ActionResult {
         try guardNotPaused()
-        let app = try registry.resolve(input.app)
+        let background = effectiveBackground(input.background)
+        let app = try resolveApproved(input.app)
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
-        raiseUnlessBackground(app: app, window: window)
+        raiseUnlessBackground(app: app, window: window, background: background)
         let err = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, input.value as CFString)
         guard err == .success else { throw mapAXError(err, action: "set_value[\(input.element_index)]") }
         postActionSleep()
@@ -283,33 +315,35 @@ public final class Actuator {
 
     public func drag(_ input: DragInput) throws -> ActionResult {
         try guardNotPaused()
+        let background = effectiveBackground(input.background)
         let (button, down, up, dragged) = try mouseButton(input.mouse_button)
         let (app, window, geometry) = try target(input.app, needsGeometry: true)
-        raiseUnlessBackground(app: app, window: window)
+        raiseUnlessBackground(app: app, window: window, background: background)
         let from = globalPoint(fromScreenshotX: input.from_x, y: input.from_y, geometry: geometry!)
         let to = globalPoint(fromScreenshotX: input.to_x, y: input.to_y, geometry: geometry!)
         post(CGEvent(mouseEventSource: nil, mouseType: down, mouseCursorPosition: from, mouseButton: button),
-             pid: app.processIdentifier)
+             pid: app.processIdentifier, background: background)
         let steps = 12
         for step in 1...steps {
             let t = Double(step) / Double(steps)
             let mid = CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t)
             post(CGEvent(mouseEventSource: nil, mouseType: dragged, mouseCursorPosition: mid, mouseButton: button),
-                 pid: app.processIdentifier)
+                 pid: app.processIdentifier, background: background)
             usleep(15_000)
         }
         post(CGEvent(mouseEventSource: nil, mouseType: up, mouseCursorPosition: to, mouseButton: button),
-             pid: app.processIdentifier)
+             pid: app.processIdentifier, background: background)
         postActionSleep()
         return ActionResult(done: true)
     }
 
     public func performSecondaryAction(_ input: PerformSecondaryActionInput) throws -> ActionResult {
         try guardNotPaused()
-        let app = try registry.resolve(input.app)
+        let background = effectiveBackground(input.background)
+        let app = try resolveApproved(input.app)
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
-        raiseUnlessBackground(app: app, window: window)
+        raiseUnlessBackground(app: app, window: window, background: background)
         let err = AXUIElementPerformAction(element, input.action as CFString)
         guard err == .success else { throw mapAXError(err, action: "perform_secondary_action(\(input.action))") }
         postActionSleep()
@@ -320,10 +354,11 @@ public final class Actuator {
     /// selection range (or collapse to a cursor) via kAXSelectedTextRangeAttribute.
     public func selectText(_ input: SelectTextInput) throws -> ActionResult {
         try guardNotPaused()
-        let app = try registry.resolve(input.app)
+        let background = effectiveBackground(input.background)
+        let app = try resolveApproved(input.app)
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
-        raiseUnlessBackground(app: app, window: window)
+        raiseUnlessBackground(app: app, window: window, background: background)
         guard let value: String = axAttribute(element, kAXValueAttribute) else {
             throw SkyServiceError(code: .elementNotActionable,
                                   message: "select_text[\(input.element_index)]: element has no text value")

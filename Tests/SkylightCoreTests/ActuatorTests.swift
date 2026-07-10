@@ -149,4 +149,29 @@ final class ActuatorTests: XCTestCase {
         assertThrowsCode(.appNotFound, try live.click(ClickInput(app: "Definitely Not An App 9000", element_index: 0)))
         assertThrowsCode(.invalidParams, try live.click(ClickInput(app: "Finder")))
     }
+
+    func testActuationBlockedByApprovalsAllowlist() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("approvals-gate-\(UUID().uuidString).json")
+        try JSONEncoder().encode(ApprovalsConfig(mode: "allowlist", allow: ["SomeOtherApp"])).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let pauseFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SKYLIGHT_PAUSE-\(UUID())")
+        let actuator = Actuator(registry: AppRegistry(), capture: AXCapture(),
+                                pauseFile: pauseFile, approvals: Approvals(fileURL: url))
+        XCTAssertThrowsError(try actuator.typeText(TypeTextInput(app: "Finder", text: "x"))) { error in
+            XCTAssertEqual((error as? SkyServiceError)?.code, .approvalRequired)
+        }
+    }
+
+    func testEffectiveBackgroundPerRequestOverride() {
+        let registry = AppRegistry()
+        let capture = AXCapture()
+        let fg = Actuator(registry: registry, capture: capture, background: false)
+        let bg = Actuator(registry: registry, capture: capture, background: true)
+        XCTAssertFalse(fg.effectiveBackground(nil), "no override: daemon default (foreground)")
+        XCTAssertTrue(fg.effectiveBackground(true), "request opts INTO background")
+        XCTAssertTrue(bg.effectiveBackground(nil), "no override: daemon default (background)")
+        XCTAssertFalse(bg.effectiveBackground(false), "request opts OUT of background")
+    }
 }

@@ -21,4 +21,8 @@ public enum SkylightPaths {
     public static var shotsDir: URL {
         supportDir.appendingPathComponent("shots")
     }
+    /// Per-app actuation allowlist; absent file = allow_all (opt-in gate).
+    public static var approvalsFile: URL {
+        supportDir.appendingPathComponent("approvals.json")
+    }
 }

@@ -26,7 +26,8 @@ let postActionSleepMs = env["SKYLIGHT_POST_ACTION_SLEEP_MS"].flatMap(Int.init) ?
 let background = ["1", "true", "yes"].contains((env["SKYLIGHT_BACKGROUND"] ?? "").lowercased())
 let screenshotter = Screenshotter(shotsDir: shotsDir)
 let actuator = Actuator(registry: registry, capture: axCapture,
-                        postActionSleepMs: postActionSleepMs, background: background)
+                        postActionSleepMs: postActionSleepMs, background: background,
+                        approvals: Approvals())
 
 /// Wraps a throwing handler: SkyServiceError → structured error response,
 /// anything else → capture_failed with the description.
@@ -84,19 +85,38 @@ router.register("echo") { req in
         ?? .failure(id: req.id, code: .protocolError, message: "encoding echo result failed")
 }
 router.register("list_apps", handle("list_apps", EmptyParams.self) { _ in registry.listApps() })
+router.register("list_windows", handle("list_windows", ListWindowsInput.self) { input in
+    let app = try registry.resolve(input.app)
+    return ListWindowsResult(windows: try axCapture.windowListings(of: app).map(\.info))
+})
 router.register("get_app_state", handle("get_app_state", GetAppStateInput.self) { input in
     let app = try registry.resolve(input.app)
-    let captured = try axCapture.capture(app: app, disableDiff: input.disableDiff ?? false)
-    let shot = try awaitResult {
-        try await screenshotter.capture(window: captured.window,
-                                        includeDataURL: input.include_data_url ?? false)
+    let captured = try axCapture.capture(app: app, windowID: input.window_id,
+                                         disableDiff: input.disableDiff ?? false)
+    // AX-only fallback: a failed screenshot (Screen Recording ungranted or
+    // lapsed — macOS 15 re-prompts periodically — or a transient SCK error)
+    // degrades the response instead of failing it; the model still gets the
+    // tree, so the diff baseline below still commits (I1's invariant is
+    // "never advance past a tree the model never saw" — it saw this one).
+    var shot: ScreenshotResult?
+    var shotError: String?
+    do {
+        shot = try awaitResult {
+            try await screenshotter.capture(window: captured.window,
+                                            includeDataURL: input.include_data_url ?? false)
+        }
+    } catch let error as SkyServiceError {
+        shotError = "\(error.code.rawValue): \(error.message)"
+    } catch {
+        // SCK/Cocoa errors are not SkyServiceError — normalize so a transient
+        // ScreenCaptureKit failure also degrades to AX-only instead of failing.
+        shotError = "capture_failed: \(error)"
     }
-    // Commit the diff baseline only now that the whole capture — screenshot
-    // included — succeeded; a capture_failed/permission_denied screenshot must
-    // not advance the baseline past a tree the model never saw.
     axCapture.commitBaseline(captured, forPid: app.processIdentifier)
-    auditLog.record(method: "get_app_state", target: input.app, outcome: "ok")
-    return AppState(text: captured.text, screenshot: shot, diffed: captured.diffed)
+    auditLog.record(method: "get_app_state", target: input.app,
+                    outcome: shotError == nil ? "ok" : "ok-ax-only")
+    return AppState(text: captured.text, screenshot: shot,
+                    screenshot_error: shotError, diffed: captured.diffed)
 })
 router.register("click", actuation("click", ClickInput.self,
     target: { "\($0.app)[\($0.element_index.map(String.init) ?? "@\($0.x ?? -1),\($0.y ?? -1)")]" },

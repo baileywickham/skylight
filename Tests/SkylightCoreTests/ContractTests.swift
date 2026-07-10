@@ -23,6 +23,7 @@ final class ContractTests: XCTestCase {
             XCTAssertEqual(request.method, req.method)
             switch req.method {
             case "list_apps": _ = try request.decodeParams(EmptyContractParams.self)
+            case "list_windows": _ = try request.decodeParams(ListWindowsInput.self)
             case "get_app_state": _ = try request.decodeParams(GetAppStateInput.self)
             case "click": _ = try request.decodeParams(ClickInput.self)
             case "press_key": _ = try request.decodeParams(PressKeyInput.self)
@@ -42,6 +43,7 @@ final class ContractTests: XCTestCase {
             let data = try JSONEncoder().encode(resp.json)
             switch resp.decodes_to {
             case "ListAppsResult": _ = try JSONDecoder().decode(ListAppsResult.self, from: data)
+            case "ListWindowsResult": _ = try JSONDecoder().decode(ListWindowsResult.self, from: data)
             case "AppState": _ = try JSONDecoder().decode(AppState.self, from: data)
             case "ActionResult": _ = try JSONDecoder().decode(ActionResult.self, from: data)
             default: XCTFail("unhandled result type \(resp.decodes_to)")

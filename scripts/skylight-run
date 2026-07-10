@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# skylight-run — run a Skylight driver with the daemon guaranteed up.
+#
+# Wraps the two things every driver needs and the two things everyone gets
+# wrong (see CLAUDE.md gotchas): ensures the daemon is running first, and
+# runs driver code in an ESM context so top-level await works.
+#
+# Usage:
+#   skylight-run <driver.ts|.mts>   run a driver file (write .mts outside ts/,
+#                                   or use an async main(); `sky` must be
+#                                   imported from <repo>/ts/src/index.js)
+#   skylight-run -e '<code>'        inline driver code; `sky` is pre-imported
+#                                   and closed for you, top-level await OK
+#   skylight-run --status           daemon / socket / permission report
+#   skylight-run --stop             stop the daemon (SIGTERM; unlinks socket)
+#
+# SKYLIGHT_BACKGROUND=1 skylight-run ...  starts the daemon (if not already
+# running) in no-focus-steal mode. Only applies at daemon start; --stop first
+# to switch modes.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+SOCK="$HOME/Library/Application Support/skylight/ipc/computeruse.sock"
+DAEMON="$REPO/.build/debug/SkylightService"
+TSX="$REPO/ts/node_modules/.bin/tsx"
+LOG="$HOME/Library/Logs/skylight/daemon.log"
+
+die() { echo "skylight-run: $*" >&2; exit 1; }
+
+socket_live() {
+  # A leftover socket file from a killed daemon still exists but refuses
+  # connections — probe it for real instead of trusting `ls`.
+  [ -S "$SOCK" ] && "$TSX" -e '
+    const net = require("node:net");
+    const s = net.connect(process.argv[1]);
+    s.on("connect", () => { s.end(); process.exit(0); });
+    s.on("error", () => process.exit(1));
+    setTimeout(() => process.exit(1), 1000);
+  ' "$SOCK" 2>/dev/null
+}
+
+ensure_deps() {
+  [ -x "$TSX" ] || (cd "$REPO/ts" && npm install --silent) || die "npm install failed in $REPO/ts"
+  if [ ! -x "$DAEMON" ]; then
+    echo "skylight-run: building daemon..." >&2
+    (cd "$REPO" && swift build) || die "swift build failed"
+  fi
+}
+
+ensure_daemon() {
+  socket_live && return 0
+  ensure_deps
+  mkdir -p "$(dirname "$LOG")"
+  echo "skylight-run: starting SkylightService${SKYLIGHT_BACKGROUND:+ (background mode)}..." >&2
+  # Detached so it survives this shell; dev-flow launch is fine for TCC here
+  # because the local debug binary already holds its grants (see CLAUDE.md).
+  nohup "$DAEMON" >> "$LOG" 2>&1 &
+  disown
+  for _ in $(seq 1 50); do
+    socket_live && return 0
+    sleep 0.2
+  done
+  die "daemon did not come up within 10s — check $LOG and '$REPO/.build/debug/skylight doctor'"
+}
+
+case "${1:-}" in
+  --status)
+    ensure_deps
+    "$REPO/.build/debug/skylight" doctor
+    pgrep -fl SkylightService || echo "daemon: not running"
+    exit 0
+    ;;
+  --stop)
+    pkill -TERM -f SkylightService 2>/dev/null && echo "stopped" || echo "not running"
+    exit 0
+    ;;
+  -e)
+    [ -n "${2:-}" ] || die "usage: skylight-run -e '<code>'"
+    ensure_daemon
+    TMPDIR_DRIVER="$(mktemp -d)"
+    TMP="$TMPDIR_DRIVER/driver.mts"   # .mts forces ESM => top-level await works
+    {
+      echo "import { sky } from '$REPO/ts/src/index.js';"
+      echo "try {"
+      cat <<<"$2"
+      echo "} finally { sky.close(); }"
+    } > "$TMP"
+    # No `exec` here (unlike the file-driver branch below): exec replaces the
+    # shell, so a trap on it would never fire. Run in-process instead so we
+    # can clean up the mktemp -d dir afterwards regardless of exit status.
+    # (set +e/-e around the call: under `set -e` a bare failing command would
+    # abort the script before the cleanup line ever ran.)
+    set +e
+    "$TSX" "$TMP"
+    status=$?
+    set -e
+    rm -rf "$TMPDIR_DRIVER"
+    exit $status
+    ;;
+  -*|"")
+    grep '^#' "$0" | sed -n '2,20p' | sed 's/^# \{0,1\}//' >&2
+    exit 2
+    ;;
+  *)
+    [ -f "$1" ] || die "no such driver file: $1"
+    ensure_daemon
+    exec "$TSX" "$@"
+    ;;
+esac

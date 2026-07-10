@@ -47,6 +47,7 @@ public enum SkyErrorCode: String, Codable {
     case unknownMethod = "unknown_method"
     case actuationPaused = "actuation_paused"
     case invalidParams = "invalid_params"
+    case approvalRequired = "approval_required"
 }
 
 public struct SkyServiceError: Error {

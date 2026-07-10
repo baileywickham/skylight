@@ -19,6 +19,18 @@ final class APITypesTests: XCTestCase {
         XCTAssertFalse(json.contains("data_url"))
     }
 
+    func testAppStateAXOnlyOmitsScreenshotAndCarriesError() throws {
+        let state = AppState(text: "[0] AXWindow", screenshot: nil,
+                             screenshot_error: "permission_denied: Screen Recording not granted",
+                             diffed: true)
+        let data = try JSONEncoder().encode(state)
+        let json = String(data: data, encoding: .utf8)!
+        XCTAssertFalse(json.contains("\"screenshot\":"), "nil screenshot must be omitted from the wire")
+        XCTAssertTrue(json.contains("\"screenshot_error\":"))
+        let decoded = try JSONDecoder().decode(AppState.self, from: data)
+        XCTAssertEqual(decoded, state)
+    }
+
     func testSelectTextInput() throws {
         let raw = #"{"app":"TextEdit","element_index":4,"text":"hello","selection_type":"cursor_after"}"#
         let input = try JSONDecoder().decode(SelectTextInput.self, from: Data(raw.utf8))
