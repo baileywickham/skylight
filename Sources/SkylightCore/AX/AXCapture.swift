@@ -317,4 +317,11 @@ public final class AXCapture {
     public func latestGeometry(forPid pid: pid_t) -> CaptureGeometry? {
         stateByPid[pid]?.latestGeometry
     }
+
+    /// Window id of the last committed capture for `pid` (nil if none or the
+    /// bridge couldn't resolve one). Coordinate actions raise THIS window so
+    /// events land where the geometry says they will.
+    public func latestWindowID(forPid pid: pid_t) -> Int? {
+        stateByPid[pid]?.previousWindowID
+    }
 }

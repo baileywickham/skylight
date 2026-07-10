@@ -105,7 +105,7 @@ func writeApprovals(_ cfg: ApprovalsConfig, to url: URL) {
                                                 withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(cfg).write(to: url)
+        try encoder.encode(cfg).write(to: url, options: .atomic)
     } catch {
         print("error: cannot write \(url.path): \(error)")
         exit(1)

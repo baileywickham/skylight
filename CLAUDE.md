@@ -122,7 +122,9 @@ screenshot fails), `click` (element_index OR x/y), `press_key`, `type_text`,
 `ping`/`echo`. Every action takes optional `background: true` (per-request
 no-focus-steal override). Actuation is gated by the opt-in per-app allowlist in
 `~/Library/Application Support/skylight/approvals.json` (`skylight approve`);
-unlisted apps fail `approval_required`. See `ts/sky.d.ts`.
+unlisted apps fail `approval_required`. The allowlist is a guardrail, not a
+security boundary — any local process of this user can edit the file or drive
+the socket directly. See `ts/sky.d.ts`.
 
 ## Docs
 

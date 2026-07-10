@@ -30,11 +30,17 @@ public struct Approvals {
         return cfg
     }
 
+    /// Fails toward safety: allow-all only when `mode` is explicitly
+    /// "allow_all" (case-insensitive). Any other decoded mode string —
+    /// "allowlist", a typo like "Allowlist", or anything else — is treated
+    /// as allowlist, so a mangled mode value can never silently fail open.
     public static func isAllowed(config: ApprovalsConfig, name: String?, bundleID: String?) -> Bool {
-        guard config.mode == "allowlist" else { return true }
-        let allowed = Set(config.allow.map { $0.lowercased() })
-        if allowed.contains("*") { return true }
-        return [name, bundleID].compactMap { $0?.lowercased() }.contains { allowed.contains($0) }
+        guard config.mode.lowercased() == "allow_all" else {
+            let allowed = Set(config.allow.map { $0.lowercased() })
+            if allowed.contains("*") { return true }
+            return [name, bundleID].compactMap { $0?.lowercased() }.contains { allowed.contains($0) }
+        }
+        return true
     }
 
     public func check(name: String?, bundleID: String?) throws {

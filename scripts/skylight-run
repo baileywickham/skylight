@@ -77,14 +77,25 @@ case "${1:-}" in
   -e)
     [ -n "${2:-}" ] || die "usage: skylight-run -e '<code>'"
     ensure_daemon
-    TMP="$(mktemp -d)/driver.mts"   # .mts forces ESM => top-level await works
+    TMPDIR_DRIVER="$(mktemp -d)"
+    TMP="$TMPDIR_DRIVER/driver.mts"   # .mts forces ESM => top-level await works
     {
       echo "import { sky } from '$REPO/ts/src/index.js';"
       echo "try {"
       cat <<<"$2"
       echo "} finally { sky.close(); }"
     } > "$TMP"
-    exec "$TSX" "$TMP"
+    # No `exec` here (unlike the file-driver branch below): exec replaces the
+    # shell, so a trap on it would never fire. Run in-process instead so we
+    # can clean up the mktemp -d dir afterwards regardless of exit status.
+    # (set +e/-e around the call: under `set -e` a bare failing command would
+    # abort the script before the cleanup line ever ran.)
+    set +e
+    "$TSX" "$TMP"
+    status=$?
+    set -e
+    rm -rf "$TMPDIR_DRIVER"
+    exit $status
     ;;
   -*|"")
     grep '^#' "$0" | sed -n '2,20p' | sed 's/^# \{0,1\}//' >&2

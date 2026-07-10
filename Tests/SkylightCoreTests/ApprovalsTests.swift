@@ -40,4 +40,12 @@ final class ApprovalsTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
         XCTAssertNoThrow(try Approvals(fileURL: url).check(name: "Safari", bundleID: nil))
     }
+
+    func testUnrecognizedModeFailsClosedToAllowlist() {
+        let cfg = ApprovalsConfig(mode: "Allowlist", allow: ["TextEdit"])
+        XCTAssertTrue(Approvals.isAllowed(config: cfg, name: "TextEdit", bundleID: nil))
+        XCTAssertFalse(Approvals.isAllowed(config: cfg, name: "Safari", bundleID: nil))
+        XCTAssertTrue(Approvals.isAllowed(config: ApprovalsConfig(mode: "ALLOW_ALL", allow: []),
+                                          name: "Safari", bundleID: nil))
+    }
 }

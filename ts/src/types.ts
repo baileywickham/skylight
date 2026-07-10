@@ -67,7 +67,7 @@ export interface GetAppStateInput {
 export interface ClickInput {
   app: AppIdentifier;
   element_index?: number;
-  /** Screenshot-pixel coordinates (see coordinate model). */
+  /** Screenshot-pixel coordinates (see coordinate model). Coordinates are interpreted against — and the raise targets — the window of the latest get_app_state capture. */
   x?: number;
   y?: number;
   mouse_button?: MouseButton;
@@ -110,6 +110,7 @@ export interface SetValueInput {
 
 export interface DragInput {
   app: AppIdentifier;
+  /** Screenshot-pixel coordinates (see coordinate model). Coordinates are interpreted against — and the raise targets — the window of the latest get_app_state capture. */
   from_x: number;
   from_y: number;
   to_x: number;

@@ -122,6 +122,15 @@ public final class Actuator {
     /// Resolves app + raised window; geometry from the latest capture for coordinate math.
     /// Geometry is checked BEFORE the live focusedWindow AX call so a missing
     /// prior capture fails fast with invalid_params without touching AX.
+    ///
+    /// When `needsGeometry` is true, the window we raise MUST be the same
+    /// window the geometry came from — get_app_state can target a specific
+    /// window_id, and a stale `focusedWindow(of:)` lookup here would raise a
+    /// different window than the one coordinates were computed against,
+    /// landing the click/drag in the wrong place. So we resolve the window
+    /// that produced the committed geometry (via its window_id) and fall
+    /// back to the live focused window only if that id is nil or no longer
+    /// resolves (e.g. the window closed).
     private func target(_ appIdentifier: String, needsGeometry: Bool) throws
         -> (app: NSRunningApplication, window: AXUIElement, geometry: CaptureGeometry?) {
         let app = try resolveApproved(appIdentifier)
@@ -132,6 +141,10 @@ public final class Actuator {
                                       message: "no prior capture for '\(appIdentifier)' — coordinates are screenshot pixels; call get_app_state first")
             }
             geometry = g
+        }
+        if needsGeometry, let windowID = capture.latestWindowID(forPid: app.processIdentifier),
+           let listing = try? capture.windowListings(of: app).first(where: { $0.info.window_id == windowID }) {
+            return (app, listing.element, geometry)
         }
         let window = try capture.focusedWindow(of: app)
         return (app, window, geometry)
