@@ -22,6 +22,11 @@ final class IPCServerTests: XCTestCase {
             }
         }
         XCTAssertEqual(result, 0, "connect failed: \(String(cString: strerror(errno)))")
+        // The test process has no SIG_IGN for SIGPIPE (that lives in the daemon's
+        // main.swift), so make sure the test's own client-side writes can never
+        // raise it either (e.g. writing while the server closes the connection).
+        var on: Int32 = 1
+        XCTAssertEqual(setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size)), 0)
         return fd
     }
 
@@ -118,19 +123,26 @@ final class IPCServerTests: XCTestCase {
     func testClientClosingBeforeReadingResponseDoesNotKillServer() throws {
         let path = tempSocketPath()
         let server = IPCServer(socketPath: path) { req in
-            Thread.sleep(forTimeInterval: 0.1) // ensure the client fd is closed before the server writes
+            Thread.sleep(forTimeInterval: 0.02) // widen the close-before-write window
             return try! Response.success(id: req.id, result: ["pong": true])
         }
         try server.start()
         defer { server.stop() }
 
-        // Orphan client: send a valid request, then vanish without reading the
-        // response. The server's write must yield EPIPE, not a fatal SIGPIPE.
-        let orphan = connect(path)
-        var out = "{\"id\":1,\"method\":\"ping\",\"params\":{}}\n"
-        _ = out.withUTF8 { write(orphan, $0.baseAddress, $0.count) }
-        close(orphan)
-        Thread.sleep(forTimeInterval: 0.3) // let the server attempt (and survive) the doomed write
+        // Orphan clients: each sends a valid request, then vanishes without
+        // reading the response. A rapid burst exercises both fatal orderings:
+        // the peer closing after accept (doomed write on a SO_NOSIGPIPE socket)
+        // and the peer closing before accept() even returns, where macOS rejects
+        // setsockopt(SO_NOSIGPIPE) with EINVAL and the server must rely on its
+        // per-thread SIGPIPE block. Every doomed write must yield EPIPE, never
+        // a fatal SIGPIPE.
+        for i in 1...20 {
+            let orphan = connect(path)
+            var out = "{\"id\":\(i),\"method\":\"ping\",\"params\":{}}\n"
+            _ = out.withUTF8 { write(orphan, $0.baseAddress, $0.count) }
+            close(orphan)
+        }
+        Thread.sleep(forTimeInterval: 0.8) // let the server attempt (and survive) the doomed writes
 
         let fd = connect(path)
         defer { close(fd) }

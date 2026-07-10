@@ -60,9 +60,17 @@ public final class IPCServer {
                 let client = accept(fd, nil, nil)
                 guard client >= 0 else { break }
                 // A peer that disconnects before reading must yield EPIPE, not SIGPIPE.
+                // macOS rejects this setsockopt with EINVAL when the peer already
+                // closed before we got here, and such a socket can never be made safe
+                // to write to: Darwin has no MSG_NOSIGNAL, and it raises SIGPIPE
+                // process-directed (a per-thread mask only redirects the kill to
+                // another thread). So a socket whose sockopt failed is served
+                // read-only — its responses are dropped, which the vanished peer
+                // could never have read anyway.
                 var on: Int32 = 1
-                setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
-                Thread.detachNewThread { self.serve(fd: client) }
+                let writable = setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on,
+                                          socklen_t(MemoryLayout<Int32>.size)) == 0
+                Thread.detachNewThread { self.serve(fd: client, writable: writable) }
             }
         }
     }
@@ -106,7 +114,11 @@ public final class IPCServer {
         return addr
     }
 
-    private func serve(fd: Int32) {
+    /// `writable` is false when SO_NOSIGPIPE could not be applied (peer already
+    /// gone by accept time): the request is still read and handled, but nothing
+    /// is ever written to the socket, because any write could raise a fatal,
+    /// process-directed SIGPIPE.
+    private func serve(fd: Int32, writable: Bool) {
         defer { close(fd) }
         let codec = LineCodec()
         var buf = [UInt8](repeating: 0, count: 65536)
@@ -117,11 +129,14 @@ public final class IPCServer {
             do {
                 lines = try codec.append(Data(buf[0..<n]))
             } catch {
-                send(fd, .failure(id: 0, code: .protocolError, message: "request line exceeds \(LineCodec.maxLineBytes) bytes"))
+                if writable {
+                    send(fd, .failure(id: 0, code: .protocolError, message: "request line exceeds \(LineCodec.maxLineBytes) bytes"))
+                }
                 return
             }
             for line in lines where !line.isEmpty {
-                send(fd, handle(line: line))
+                let response = handle(line: line)
+                if writable { send(fd, response) }
             }
         }
     }
