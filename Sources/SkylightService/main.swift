@@ -18,8 +18,15 @@ let env = ProcessInfo.processInfo.environment
 let shotsDir = env["SKYLIGHT_SHOTS_DIR"].map { URL(fileURLWithPath: $0) }
     ?? SkylightPaths.shotsDir
 let postActionSleepMs = env["SKYLIGHT_POST_ACTION_SLEEP_MS"].flatMap(Int.init) ?? 100
+// SKYLIGHT_BACKGROUND=1: run actions without stealing focus — activation is
+// skipped for every action and synthetic events are posted per-pid
+// (CGEventPostToPid) instead of to the session tap. Default OFF preserves the
+// activation-first behavior exactly. See Actuation/Activation.swift for the
+// best-effort caveats on keyboard/coordinate input to non-frontmost apps.
+let background = ["1", "true", "yes"].contains((env["SKYLIGHT_BACKGROUND"] ?? "").lowercased())
 let screenshotter = Screenshotter(shotsDir: shotsDir)
-let actuator = Actuator(registry: registry, capture: axCapture, postActionSleepMs: postActionSleepMs)
+let actuator = Actuator(registry: registry, capture: axCapture,
+                        postActionSleepMs: postActionSleepMs, background: background)
 
 /// Wraps a throwing handler: SkyServiceError → structured error response,
 /// anything else → capture_failed with the description.
@@ -118,7 +125,8 @@ for line in Permissions.instructions(for: status) {
 let server = IPCServer(socketPath: SkylightPaths.socketPath, handler: router.route)
 do {
     try server.start()
-    FileHandle.standardError.write(Data("SkylightService \(SkylightVersion.current) listening at \(SkylightPaths.socketPath)\n".utf8))
+    let mode = background ? " (background mode: actions will not steal focus)" : ""
+    FileHandle.standardError.write(Data("SkylightService \(SkylightVersion.current) listening at \(SkylightPaths.socketPath)\(mode)\n".utf8))
 } catch {
     FileHandle.standardError.write(Data("fatal: \(error)\n".utf8))
     exit(1)
