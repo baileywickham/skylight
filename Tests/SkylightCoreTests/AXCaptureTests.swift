@@ -27,6 +27,20 @@ final class AXCaptureTests: XCTestCase {
         }
     }
 
+    func testWindowListingsWithoutAXPermissionThrowsPermissionDenied() throws {
+        try XCTSkipIf(Permissions.status().accessibility, "runner unexpectedly has AX permission")
+        let finder = try AppRegistry().resolve("com.apple.finder")
+        XCTAssertThrowsError(try AXCapture().windowListings(of: finder)) { error in
+            let e = error as? SkyServiceError
+            XCTAssertEqual(e?.code, .permissionDenied)
+            XCTAssertTrue(e?.message.contains("Privacy & Security > Accessibility") ?? false)
+            // The message is the Permissions.instructions() accessibility line verbatim.
+            let expected = Permissions.instructions(
+                for: PermissionStatus(accessibility: false, screen_recording: true))
+            XCTAssertEqual(e?.message, expected.joined(separator: " "))
+        }
+    }
+
     func testUnknownElementIndexIsStale() {
         XCTAssertThrowsError(try AXCapture().element(forIndex: 42, appPid: 1)) { error in
             XCTAssertEqual((error as? SkyServiceError)?.code, .staleElementIndex)

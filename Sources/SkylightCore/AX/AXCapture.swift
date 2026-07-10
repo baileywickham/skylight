@@ -124,6 +124,17 @@ public final class AXCapture {
         return fresh
     }
 
+    /// kAXWindowsAttribute → [AXUIElement]. CFTypeID is the only runtime-correct
+    /// filter for CF types; `is AXUIElement` is vacuously true (see LiveAXNode).
+    private func windowElements(of appElement: AXUIElement) -> [AXUIElement] {
+        (axAttribute(appElement, kAXWindowsAttribute) as CFArray?)
+            .map { cfArray -> [AXUIElement] in
+                let array = cfArray as [AnyObject]
+                return array.filter { CFGetTypeID($0) == AXUIElementGetTypeID() }
+                    .map { unsafeDowncast($0, to: AXUIElement.self) }
+            } ?? []
+    }
+
     public func focusedWindow(of app: NSRunningApplication) throws -> AXUIElement {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
@@ -133,14 +144,7 @@ public final class AXCapture {
         if let main: AXUIElement = axAttribute(appElement, kAXMainWindowAttribute) {
             return main
         }
-        let windows: [AXUIElement] = (axAttribute(appElement, kAXWindowsAttribute) as CFArray?)
-            .map { cfArray -> [AXUIElement] in
-                // See children in LiveAXNode: CFTypeID is the only runtime-correct
-                // filter for CF types; `is AXUIElement` is vacuously true.
-                let array = cfArray as [AnyObject]
-                return array.filter { CFGetTypeID($0) == AXUIElementGetTypeID() }
-                    .map { unsafeDowncast($0, to: AXUIElement.self) }
-            } ?? []
+        let windows = windowElements(of: appElement)
         guard let first = windows.first else {
             throw SkyServiceError(code: .noFocusedWindow,
                                   message: "\(app.localizedName ?? "app") has no focused window")
@@ -239,13 +243,7 @@ public final class AXCapture {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
         let focused: AXUIElement? = axAttribute(appElement, kAXFocusedWindowAttribute)
-        let wins: [AXUIElement] = (axAttribute(appElement, kAXWindowsAttribute) as CFArray?)
-            .map { cfArray -> [AXUIElement] in
-                // CFTypeID is the only runtime-correct filter for CF types.
-                let array = cfArray as [AnyObject]
-                return array.filter { CFGetTypeID($0) == AXUIElementGetTypeID() }
-                    .map { unsafeDowncast($0, to: AXUIElement.self) }
-            } ?? []
+        let wins = windowElements(of: appElement)
         return wins.map { w in
             let minimized: NSNumber? = axAttribute(w, kAXMinimizedAttribute)
             let title: String? = axAttribute(w, kAXTitleAttribute)
