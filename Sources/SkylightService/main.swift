@@ -1,6 +1,10 @@
 import Foundation
 import SkylightCore
 
+// A client that disconnects before reading its response must never kill the
+// daemon: ignore SIGPIPE process-wide (writes then fail with EPIPE instead).
+signal(SIGPIPE, SIG_IGN)
+
 let router = RequestRouter()
 router.register("ping") { req in
     try! Response.success(

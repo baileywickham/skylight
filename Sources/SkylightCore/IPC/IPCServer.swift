@@ -19,7 +19,14 @@ public final class IPCServer {
     private let handler: Handler
     /// The global actuation queue: every request from every connection lands here.
     private let actuationQueue = DispatchQueue(label: "com.skylight.actuation")
+    /// Guards `listenFD`, which is touched from start()/stop() and the accept thread.
+    private let stateLock = NSLock()
     private var listenFD: Int32 = -1
+
+    private var isListening: Bool {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return listenFD >= 0
+    }
 
     public init(socketPath: String, requestTimeout: TimeInterval = 30, handler: @escaping Handler) {
         self.socketPath = socketPath
@@ -32,30 +39,43 @@ public final class IPCServer {
         let dir = (socketPath as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
 
-        listenFD = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard listenFD >= 0 else { throw IPCError.socketFailed(errno) }
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw IPCError.socketFailed(errno) }
         var addr = Self.sockaddr(for: socketPath)
         let bound = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: Darwin.sockaddr.self, capacity: 1) {
-                bind(listenFD, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
-        guard bound == 0 else { close(listenFD); throw IPCError.bindFailed(errno) }
+        guard bound == 0 else { close(fd); throw IPCError.bindFailed(errno) }
         chmod(socketPath, 0o600) // owner-only: the socket grants full input control
-        guard listen(listenFD, 16) == 0 else { close(listenFD); throw IPCError.listenFailed(errno) }
+        guard listen(fd, 16) == 0 else { close(fd); throw IPCError.listenFailed(errno) }
 
-        let fd = listenFD
+        stateLock.lock()
+        listenFD = fd
+        stateLock.unlock()
+
         Thread.detachNewThread { [weak self] in
-            while let self, self.listenFD >= 0 {
+            while let self, self.isListening {
                 let client = accept(fd, nil, nil)
                 guard client >= 0 else { break }
+                // A peer that disconnects before reading must yield EPIPE, not SIGPIPE.
+                var on: Int32 = 1
+                setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
                 Thread.detachNewThread { self.serve(fd: client) }
             }
         }
     }
 
     public func stop() {
-        if listenFD >= 0 { close(listenFD); listenFD = -1 }
+        stateLock.lock()
+        let fd = listenFD
+        listenFD = -1
+        stateLock.unlock()
+        if fd >= 0 {
+            shutdown(fd, SHUT_RDWR) // wake a blocked accept() before closing
+            close(fd)
+        }
         unlink(socketPath)
     }
 
@@ -126,6 +146,16 @@ public final class IPCServer {
     private func send(_ fd: Int32, _ response: Response) {
         guard var data = try? JSONEncoder().encode(response) else { return }
         data.append(0x0A)
-        data.withUnsafeBytes { _ = write(fd, $0.baseAddress, $0.count) }
+        data.withUnsafeBytes { raw in
+            var sent = 0
+            while sent < raw.count {
+                let n = write(fd, raw.baseAddress! + sent, raw.count - sent)
+                if n < 0 {
+                    if errno == EINTR { continue }
+                    return // EPIPE etc.: peer is gone, drop the response
+                }
+                sent += n
+            }
+        }
     }
 }

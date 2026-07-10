@@ -115,6 +115,31 @@ final class IPCServerTests: XCTestCase {
         XCTAssertEqual(resp.error?.code, "timeout")
     }
 
+    func testClientClosingBeforeReadingResponseDoesNotKillServer() throws {
+        let path = tempSocketPath()
+        let server = IPCServer(socketPath: path) { req in
+            Thread.sleep(forTimeInterval: 0.1) // ensure the client fd is closed before the server writes
+            return try! Response.success(id: req.id, result: ["pong": true])
+        }
+        try server.start()
+        defer { server.stop() }
+
+        // Orphan client: send a valid request, then vanish without reading the
+        // response. The server's write must yield EPIPE, not a fatal SIGPIPE.
+        let orphan = connect(path)
+        var out = "{\"id\":1,\"method\":\"ping\",\"params\":{}}\n"
+        _ = out.withUTF8 { write(orphan, $0.baseAddress, $0.count) }
+        close(orphan)
+        Thread.sleep(forTimeInterval: 0.3) // let the server attempt (and survive) the doomed write
+
+        let fd = connect(path)
+        defer { close(fd) }
+        let reply = roundTrip(fd, #"{"id":2,"method":"ping","params":{}}"#)
+        let resp = try JSONDecoder().decode(Response.self, from: Data(reply.utf8))
+        XCTAssertEqual(resp.id, 2)
+        XCTAssertEqual(resp.result, .object(["pong": .bool(true)]))
+    }
+
     func testOversizedLineGetsProtocolError() throws {
         let path = tempSocketPath()
         let server = IPCServer(socketPath: path, handler: { try! Response.success(id: $0.id, result: ["pong": true]) })
