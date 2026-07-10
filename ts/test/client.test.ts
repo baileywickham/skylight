@@ -76,4 +76,74 @@ describe("SkyClient", () => {
     });
     await expect(client.call("warp_drive", {})).rejects.toBeInstanceOf(SkyError);
   });
+
+  it("rejects every concurrent call (not just the oldest) on an id:0 protocol error, then hangs up", async () => {
+    const sock = tmpSock();
+    // Stub daemon that mimics the Swift daemon's protocol-error behavior:
+    // never answer per-request, just send one unmatched id:0 error frame and
+    // then close the socket -- exactly what happens on an oversized/unparseable
+    // request line.
+    const server = net.createServer((conn) => {
+      conn.on("data", () => {
+        conn.write(JSON.stringify({ id: 0, ok: false, error: { code: "protocol_error", message: "request line too long" } }) + "\n");
+        conn.end();
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(sock, () => resolve()));
+
+    const client = new SkyClient({ socket_path: sock });
+    clients.push(client);
+
+    const [pingResult, echoResult] = await Promise.allSettled([
+      client.call("ping", {}),
+      client.call("echo", { app: "Notes" }),
+    ]);
+
+    expect(pingResult.status).toBe("rejected");
+    expect(echoResult.status).toBe("rejected");
+    if (pingResult.status === "rejected") {
+      expect(pingResult.reason).toBeInstanceOf(SkyError);
+      expect(pingResult.reason).toMatchObject({ code: "protocol_error" });
+    }
+    if (echoResult.status === "rejected") {
+      expect(echoResult.reason).toBeInstanceOf(SkyError);
+      expect(echoResult.reason).toMatchObject({ code: "protocol_error" });
+    }
+  }, 5000);
+
+  it("rejects still-pending calls when the socket drops without any response", async () => {
+    const sock = tmpSock();
+    // Stub daemon that accepts the connection and then closes it immediately
+    // without ever writing a response -- simulates a mid-flight socket drop.
+    const server = net.createServer((conn) => {
+      conn.on("data", () => conn.end());
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(sock, () => resolve()));
+
+    const client = new SkyClient({ socket_path: sock });
+    clients.push(client);
+
+    await expect(client.call("ping", {})).rejects.toBeInstanceOf(SkyError);
+  }, 5000);
+
+  it("close() settles outstanding calls instead of leaving them hanging", async () => {
+    const sock = tmpSock();
+    // Stub daemon that accepts connections but never responds, so the call
+    // stays pending until close() is invoked.
+    const server = net.createServer(() => {});
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(sock, () => resolve()));
+
+    const client = new SkyClient({ socket_path: sock });
+    clients.push(client);
+
+    const pending = client.call("ping", {});
+    // Give the connection a tick to establish before closing.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    client.close();
+
+    await expect(pending).rejects.toThrow();
+  }, 5000);
 });

@@ -78,13 +78,37 @@ export class SkyClient {
           "connection_failed",
           `cannot reach SkylightService at ${this.config.socket_path} (run 'skylight start'): ${err.message}`,
         );
-        for (const p of this.pending.values()) p.reject(wrapped);
-        this.pending.clear();
+        this.rejectAllPending(wrapped);
         reject(wrapped);
       });
       socket.on("data", (chunk) => this.onData(chunk));
+      socket.on("close", () => this.handleSocketTeardown(socket));
+      socket.on("end", () => this.handleSocketTeardown(socket));
     });
     return this.connecting;
+  }
+
+  /** Rejects and clears every pending call with the same error. */
+  private rejectAllPending(err: Error): void {
+    for (const p of this.pending.values()) p.reject(err);
+    this.pending.clear();
+  }
+
+  /**
+   * Called when the socket closes/ends/errors out from under us (including
+   * the FIN the daemon sends right after an id:0 protocol error). Fails any
+   * still-pending calls instead of leaving them hanging forever, and resets
+   * connection state so the next call() reconnects lazily.
+   */
+  private handleSocketTeardown(socket: net.Socket): void {
+    // Only react to the socket we currently consider active: a socket that
+    // failed before ever connecting is already handled by the "error"
+    // listener above, and a stale/superseded socket's late "close"/"end"
+    // must not clobber a newer in-flight reconnect.
+    if (this.socket !== socket) return;
+    this.socket = null;
+    this.connecting = null;
+    this.rejectAllPending(new SkyError("connection_closed", "connection to SkylightService closed unexpectedly"));
   }
 
   private onData(chunk: Buffer): void {
@@ -99,16 +123,12 @@ export class SkyClient {
       if (!waiter) {
         // Unmatched frame (e.g. protocol-level error reported with id: 0, or a
         // stray/duplicate response). Don't drop it silently and don't hang any
-        // pending caller forever: surface it by failing the oldest in-flight
-        // request, since that's the request most likely to have provoked a
-        // protocol-level failure (e.g. an oversized/malformed request line).
+        // pending caller forever: surface it by failing every in-flight
+        // request, since a protocol-level failure (e.g. an oversized/
+        // malformed request line) invalidates the whole connection, not just
+        // the oldest call.
         if (!msg.ok) {
-          const oldestId = [...this.pending.keys()].sort((a, b) => a - b)[0];
-          if (oldestId !== undefined) {
-            const oldest = this.pending.get(oldestId)!;
-            this.pending.delete(oldestId);
-            oldest.reject(new SkyError(msg.error?.code ?? "protocol_error", msg.error?.message ?? "unmatched protocol error"));
-          }
+          this.rejectAllPending(new SkyError(msg.error?.code ?? "protocol_error", msg.error?.message ?? "unmatched protocol error"));
         }
         continue;
       }
@@ -128,8 +148,10 @@ export class SkyClient {
   }
 
   close(): void {
+    this.rejectAllPending(new SkyError("connection_closed", "SkyClient was closed"));
     this.socket?.destroy();
     this.socket = null;
+    this.connecting = null;
   }
 
   list_apps(): Promise<ListAppsResult> { return this.call("list_apps", {}); }
