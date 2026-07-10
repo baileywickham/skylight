@@ -1,0 +1,18 @@
+{
+  "name": "@skylight/sky",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "sky.d.ts",
+  "scripts": {
+    "test": "vitest run",
+    "build:dts": "tsc -p tsconfig.json && cat dist/types.d.ts dist/client.d.ts dist/index.d.ts > sky.d.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

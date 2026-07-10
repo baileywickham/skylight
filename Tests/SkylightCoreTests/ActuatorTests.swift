@@ -1,0 +1,99 @@
+import XCTest
+import SkylightCore
+
+final class ActuatorTests: XCTestCase {
+    private func makeActuator(paused: Bool = false) throws -> Actuator {
+        let pauseFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SKYLIGHT_PAUSE-\(UUID())")
+        if paused {
+            FileManager.default.createFile(atPath: pauseFile.path, contents: nil)
+        }
+        return Actuator(registry: AppRegistry(), capture: AXCapture(),
+                        postActionSleepMs: 0, pauseFile: pauseFile)
+    }
+
+    private func assertThrowsCode(_ code: SkyErrorCode, _ body: @autoclosure () throws -> ActionResult,
+                                  file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertThrowsError(try body(), file: file, line: line) { error in
+            XCTAssertEqual((error as? SkyServiceError)?.code, code, file: file, line: line)
+        }
+    }
+
+    func testPauseSentinelHaltsAllActuation() throws {
+        let actuator = try makeActuator(paused: true)
+        assertThrowsCode(.actuationPaused, try actuator.click(ClickInput(app: "Finder", element_index: 0)))
+        assertThrowsCode(.actuationPaused, try actuator.typeText(TypeTextInput(app: "Finder", text: "x")))
+        assertThrowsCode(.actuationPaused, try actuator.pressKey(PressKeyInput(app: "Finder", keys: "Return")))
+    }
+
+    func testUnknownAppIsAppNotFound() throws {
+        let actuator = try makeActuator()
+        assertThrowsCode(.appNotFound, try actuator.click(ClickInput(app: "Definitely Not An App 9000", element_index: 0)))
+    }
+
+    func testUnknownElementIndexIsStale() throws {
+        let actuator = try makeActuator()
+        assertThrowsCode(.staleElementIndex, try actuator.setValue(SetValueInput(app: "Finder", element_index: 777, value: "x")))
+    }
+
+    func testClickNeedsIndexOrCoordinates() throws {
+        let actuator = try makeActuator()
+        assertThrowsCode(.invalidParams, try actuator.click(ClickInput(app: "Finder")))
+    }
+
+    func testCoordinateClickWithoutPriorCaptureIsInvalid() throws {
+        let actuator = try makeActuator()
+        assertThrowsCode(.invalidParams, try actuator.click(ClickInput(app: "Finder", x: 10, y: 10)))
+    }
+
+    func testBadMouseButtonAndDirectionAreInvalidParams() throws {
+        let actuator = try makeActuator()
+        assertThrowsCode(.invalidParams, try actuator.click(ClickInput(app: "Finder", x: 1, y: 1, mouse_button: "chartreuse")))
+        assertThrowsCode(.invalidParams, try actuator.scroll(ScrollInput(app: "Finder", element_index: 777, direction: "sideways", pages: 1)))
+    }
+
+    // MARK: - type_text UTF-16 chunking (surrogate-pair safety)
+
+    private func isHighSurrogate(_ unit: UInt16) -> Bool { (0xD800...0xDBFF).contains(unit) }
+
+    private func assertChunksWellFormed(_ text: String, maxUnits: Int = 20,
+                                        file: StaticString = #filePath, line: UInt = #line) {
+        let chunks = utf16Chunks(text, maxUnits: maxUnits)
+        for chunk in chunks {
+            XCTAssertFalse(chunk.isEmpty, file: file, line: line)
+            XCTAssertLessThanOrEqual(chunk.count, maxUnits + 1, file: file, line: line)
+            XCTAssertFalse(isHighSurrogate(chunk.last!),
+                           "chunk ends on a lone high surrogate — the pair was split across key events",
+                           file: file, line: line)
+        }
+        let rejoined = String(utf16CodeUnits: chunks.flatMap { $0 }, count: chunks.reduce(0) { $0 + $1.count })
+        XCTAssertEqual(rejoined, text, "chunks must concatenate back to the original text",
+                       file: file, line: line)
+    }
+
+    func testUTF16ChunkingNeverSplitsASurrogatePairAtTheBoundary() {
+        // 19 BMP units then an emoji (2 UTF-16 units): units[19] is the high
+        // surrogate, exactly where the naive fixed-20 slice would cut the pair.
+        assertChunksWellFormed(String(repeating: "a", count: 19) + "😀" + "tail")
+        // Emoji fully occupying units 19-20 of every window: a run of pairs.
+        assertChunksWellFormed(String(repeating: "a", count: 19) + String(repeating: "😀", count: 30))
+        // Boundary at 20 exactly after a complete pair must NOT over-extend.
+        assertChunksWellFormed(String(repeating: "a", count: 18) + "😀" + String(repeating: "b", count: 25))
+    }
+
+    func testUTF16ChunkingPlainAndEdgeInputs() {
+        XCTAssertTrue(utf16Chunks("").isEmpty)
+        XCTAssertEqual(utf16Chunks("short"), [Array("short".utf16)])
+        assertChunksWellFormed(String(repeating: "x", count: 100)) // exact multiples
+        assertChunksWellFormed(String(repeating: "😀", count: 3), maxUnits: 1) // every boundary is a pair
+        // A 20-unit-aligned emoji keeps the chunk at 21 units, next chunk restarts cleanly.
+        let chunks = utf16Chunks(String(repeating: "a", count: 19) + "😀" + "bc")
+        XCTAssertEqual(chunks.map(\.count), [21, 2])
+    }
+
+    func testSelectTextOnUnknownIndexIsStale() throws {
+        let actuator = try makeActuator()
+        assertThrowsCode(.staleElementIndex, try actuator.selectText(SelectTextInput(
+            app: "Finder", element_index: 777, text: "hello", selection_type: "select")))
+    }
+}

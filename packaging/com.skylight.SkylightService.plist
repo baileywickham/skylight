@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.skylight.SkylightService</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/Applications/SkylightService.app/Contents/MacOS/SkylightService</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <!-- Belt-and-suspenders with the daemon's absolute default
+         (~/Library/Application Support/skylight/shots): make the launched
+         daemon's shots dir unambiguous regardless of launchd's cwd. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>SKYLIGHT_SHOTS_DIR</key>
+        <string>__HOME__/Library/Application Support/skylight/shots</string>
+    </dict>
+    <key>KeepAlive</key><false/>
+    <key>StandardErrorPath</key><string>__HOME__/Library/Logs/skylight/service.log</string>
+</dict>
+</plist>

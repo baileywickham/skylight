@@ -1,0 +1,27 @@
+{
+  "requests": [
+    { "method": "list_apps", "params": {}, "line": "{\"id\":1,\"method\":\"list_apps\",\"params\":{}}" },
+    { "method": "get_app_state", "params": { "app": "Notes" }, "line": "{\"id\":1,\"method\":\"get_app_state\",\"params\":{\"app\":\"Notes\"}}" },
+    { "method": "get_app_state", "params": { "app": "Notes", "disableDiff": true, "include_data_url": true }, "line": "{\"id\":1,\"method\":\"get_app_state\",\"params\":{\"app\":\"Notes\",\"disableDiff\":true,\"include_data_url\":true}}" },
+    { "method": "click", "params": { "app": "Notes", "element_index": 12 }, "line": "{\"id\":1,\"method\":\"click\",\"params\":{\"app\":\"Notes\",\"element_index\":12}}" },
+    { "method": "click", "params": { "app": "Notes", "x": 100, "y": 200, "mouse_button": "right", "click_count": 2 }, "line": "{\"id\":1,\"method\":\"click\",\"params\":{\"app\":\"Notes\",\"x\":100,\"y\":200,\"mouse_button\":\"right\",\"click_count\":2}}" },
+    { "method": "press_key", "params": { "app": "Notes", "keys": "Cmd+Shift+t" }, "line": "{\"id\":1,\"method\":\"press_key\",\"params\":{\"app\":\"Notes\",\"keys\":\"Cmd+Shift+t\"}}" },
+    { "method": "type_text", "params": { "app": "Notes", "text": "hello" }, "line": "{\"id\":1,\"method\":\"type_text\",\"params\":{\"app\":\"Notes\",\"text\":\"hello\"}}" },
+    { "method": "scroll", "params": { "app": "Notes", "element_index": 4, "direction": "down", "pages": 1.5 }, "line": "{\"id\":1,\"method\":\"scroll\",\"params\":{\"app\":\"Notes\",\"element_index\":4,\"direction\":\"down\",\"pages\":1.5}}" },
+    { "method": "set_value", "params": { "app": "Notes", "element_index": 4, "value": "new" }, "line": "{\"id\":1,\"method\":\"set_value\",\"params\":{\"app\":\"Notes\",\"element_index\":4,\"value\":\"new\"}}" },
+    { "method": "drag", "params": { "app": "Notes", "from_x": 1, "from_y": 2, "to_x": 3, "to_y": 4 }, "line": "{\"id\":1,\"method\":\"drag\",\"params\":{\"app\":\"Notes\",\"from_x\":1,\"from_y\":2,\"to_x\":3,\"to_y\":4}}" },
+    { "method": "perform_secondary_action", "params": { "app": "Notes", "element_index": 4, "action": "AXShowMenu" }, "line": "{\"id\":1,\"method\":\"perform_secondary_action\",\"params\":{\"app\":\"Notes\",\"element_index\":4,\"action\":\"AXShowMenu\"}}" },
+    { "method": "select_text", "params": { "app": "Notes", "element_index": 4, "text": "hi", "selection_type": "select" }, "line": "{\"id\":1,\"method\":\"select_text\",\"params\":{\"app\":\"Notes\",\"element_index\":4,\"text\":\"hi\",\"selection_type\":\"select\"}}" }
+  ],
+  "responses": [
+    { "name": "list_apps", "decodes_to": "ListAppsResult", "json": { "apps": [{ "name": "Notes", "bundle_id": "com.apple.Notes", "pid": 501, "is_frontmost": true, "launch_date": "2026-07-09T10:00:00Z" }] } },
+    { "name": "app_state", "decodes_to": "AppState", "json": { "text": "[0] AXWindow \"Untitled\"", "screenshot": { "url": "file:///x/shot.png", "width": 1600, "height": 1000 }, "diffed": false } },
+    { "name": "action", "decodes_to": "ActionResult", "json": { "done": true } }
+  ],
+  "json_values": [
+    { "kind": "null", "json": null },
+    { "kind": "number", "json": 42.5 },
+    { "kind": "string", "json": "hi" },
+    { "kind": "array", "json": [1, 2, 3] }
+  ]
+}
