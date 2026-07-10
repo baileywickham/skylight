@@ -1,0 +1,4 @@
+.skylight/
+node_modules/
+.build/
+*.log
