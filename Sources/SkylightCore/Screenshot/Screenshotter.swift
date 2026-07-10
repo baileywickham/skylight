@@ -93,7 +93,7 @@ public final class Screenshotter {
         let url = shotsDir.appendingPathComponent("shot-\(stamp)-\(shotCounter).png")
         try writePNG(image, to: url)
         return ScreenshotResult(
-            url: "file://" + url.path,
+            url: url.absoluteString,
             data_url: includeDataURL ? try pngDataURL(image) : nil,
             width: image.width,
             height: image.height)

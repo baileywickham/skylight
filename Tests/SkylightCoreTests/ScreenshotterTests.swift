@@ -43,4 +43,27 @@ final class ScreenshotterTests: XCTestCase {
         }
         XCTAssertEqual(value, 42)
     }
+
+    func testFileURLWithSpaceInPath() throws {
+        let dirName = "skylight test dir"
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(dirName)
+        let url = dir.appendingPathComponent("shot with space.png")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try writePNG(solidImage(width: 8, height: 4), to: url)
+
+        // Test that absoluteString produces a valid file:// URL with percent-encoding
+        let fileURL = url.absoluteString
+        XCTAssertTrue(fileURL.hasPrefix("file://"))
+
+        // Verify round-tripping: the URL string should decode back to the actual path
+        let decodedURL = URL(string: fileURL)
+        XCTAssertNotNil(decodedURL)
+        XCTAssertEqual(decodedURL!.path, url.path)
+
+        // Verify the file exists at the decoded path
+        XCTAssertTrue(FileManager.default.fileExists(atPath: decodedURL!.path))
+
+        // Clean up
+        try FileManager.default.removeItem(at: dir)
+    }
 }
