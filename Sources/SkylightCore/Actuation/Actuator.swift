@@ -233,11 +233,26 @@ public final class Actuator {
         return ActionResult(done: true)
     }
 
-    /// Milestone 1: structured not_implemented. Milestone 2 (Task 18) replaces
-    /// this body with kAXSelectedTextRangeAttribute selection.
+    /// Milestone 2: locate the match in the element's value and set the
+    /// selection range (or collapse to a cursor) via kAXSelectedTextRangeAttribute.
     public func selectText(_ input: SelectTextInput) throws -> ActionResult {
         try guardNotPaused()
-        throw SkyServiceError(code: .notImplemented,
-                              message: "select_text ships in milestone 2; use click + press_key meanwhile")
+        let app = try registry.resolve(input.app)
+        let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
+        let window = try capture.focusedWindow(of: app)
+        activateAndRaise(app: app, window: window)
+        guard let value: String = axAttribute(element, kAXValueAttribute) else {
+            throw SkyServiceError(code: .elementNotActionable,
+                                  message: "select_text[\(input.element_index)]: element has no text value")
+        }
+        var range = try resolveSelectionRange(in: value, text: input.text, prefix: input.prefix,
+                                              suffix: input.suffix, selectionType: input.selection_type)
+        guard let axRange = AXValueCreate(.cfRange, &range) else {
+            throw SkyServiceError(code: .elementNotActionable, message: "select_text: cannot build CFRange")
+        }
+        let err = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axRange)
+        guard err == .success else { throw mapAXError(err, action: "select_text[\(input.element_index)]") }
+        postActionSleep()
+        return ActionResult(done: true)
     }
 }

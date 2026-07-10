@@ -73,4 +73,14 @@ describe.runIf(gated)("live smoke (TextEdit)", () => {
     const apps = await sky.list_apps();
     expect(apps.apps.some((a) => a.name === "TextEdit")).toBe(true);
   });
+
+  it("select_text selects a substring in TextEdit", async () => {
+    const state = await sky.get_app_state({ app: "TextEdit" });
+    const textArea = state.text.split("\n").find((l) => l.includes("AXTextArea"));
+    expect(textArea).toBeDefined();
+    const index = Number(textArea!.match(/^\s*\[(\d+)\]/)![1]);
+    const r = await sky.select_text({ app: "TextEdit", element_index: index, text: "smoke", selection_type: "select" });
+    expect(r.done).toBe(true);
+    sky.close();
+  }, 30000);
 });

@@ -52,9 +52,9 @@ final class ActuatorTests: XCTestCase {
         assertThrowsCode(.invalidParams, try actuator.scroll(ScrollInput(app: "Finder", element_index: 777, direction: "sideways", pages: 1)))
     }
 
-    func testSelectTextIsNotImplementedInMilestone1() throws {
+    func testSelectTextOnUnknownIndexIsStale() throws {
         let actuator = try makeActuator()
-        assertThrowsCode(.notImplemented, try actuator.selectText(SelectTextInput(
-            app: "Finder", element_index: 0, text: "hello", selection_type: "select")))
+        assertThrowsCode(.staleElementIndex, try actuator.selectText(SelectTextInput(
+            app: "Finder", element_index: 777, text: "hello", selection_type: "select")))
     }
 }
