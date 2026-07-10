@@ -84,6 +84,10 @@ router.register("echo") { req in
         ?? .failure(id: req.id, code: .protocolError, message: "encoding echo result failed")
 }
 router.register("list_apps", handle("list_apps", EmptyParams.self) { _ in registry.listApps() })
+router.register("list_windows", handle("list_windows", ListWindowsInput.self) { input in
+    let app = try registry.resolve(input.app)
+    return ListWindowsResult(windows: try axCapture.windowListings(of: app).map(\.info))
+})
 router.register("get_app_state", handle("get_app_state", GetAppStateInput.self) { input in
     let app = try registry.resolve(input.app)
     let captured = try axCapture.capture(app: app, disableDiff: input.disableDiff ?? false)

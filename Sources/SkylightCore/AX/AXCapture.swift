@@ -221,6 +221,42 @@ public final class AXCapture {
                              window: window, geometry: geometry, diffed: diffed)
     }
 
+    /// One entry per AX window of the app, with the wire-facing WindowInfo and
+    /// the live element (used by window_id-targeted capture). Ordered as the
+    /// app reports kAXWindowsAttribute.
+    public struct WindowListing {
+        public let element: AXUIElement
+        public let info: WindowInfo
+    }
+
+    public func windowListings(of app: NSRunningApplication) throws -> [WindowListing] {
+        guard Permissions.status().accessibility else {
+            let instructions = Permissions.instructions(
+                for: PermissionStatus(accessibility: false, screen_recording: true))
+            throw SkyServiceError(code: .permissionDenied,
+                                  message: instructions.joined(separator: " "))
+        }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
+        let focused: AXUIElement? = axAttribute(appElement, kAXFocusedWindowAttribute)
+        let wins: [AXUIElement] = (axAttribute(appElement, kAXWindowsAttribute) as CFArray?)
+            .map { cfArray -> [AXUIElement] in
+                // CFTypeID is the only runtime-correct filter for CF types.
+                let array = cfArray as [AnyObject]
+                return array.filter { CFGetTypeID($0) == AXUIElementGetTypeID() }
+                    .map { unsafeDowncast($0, to: AXUIElement.self) }
+            } ?? []
+        return wins.map { w in
+            let minimized: NSNumber? = axAttribute(w, kAXMinimizedAttribute)
+            let title: String? = axAttribute(w, kAXTitleAttribute)
+            return WindowListing(element: w, info: WindowInfo(
+                window_id: axWindowID(of: w).map { Int($0) },
+                title: title.map { sanitizeAXText($0) },
+                is_focused: focused.map { CFEqual($0, w) } ?? false,
+                is_minimized: minimized?.boolValue ?? false))
+        }
+    }
+
     /// Commits a capture as the new diff baseline (and coordinate geometry)
     /// for `pid`. Call only after the capture's full response — including the
     /// screenshot — succeeded, so the baseline never advances past a tree the

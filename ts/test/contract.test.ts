@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildRequest } from "../src/client.js";
-import type { ActionResult, AppState, ListAppsResult } from "../src/types.js";
+import type { ActionResult, AppState, ListAppsResult, ListWindowsResult } from "../src/types.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixtures = JSON.parse(
@@ -29,6 +29,10 @@ describe("contract", () => {
         expect(Array.isArray(r.apps)).toBe(true);
         expect(typeof r.apps[0].pid).toBe("number");
         expect(typeof r.apps[0].is_frontmost).toBe("boolean");
+      } else if (resp.decodes_to === "ListWindowsResult") {
+        const r = resp.json as ListWindowsResult;
+        expect(Array.isArray(r.windows)).toBe(true);
+        expect(typeof r.windows[0].is_focused).toBe("boolean");
       } else if (resp.decodes_to === "AppState") {
         const r = resp.json as AppState;
         expect(typeof r.text).toBe("string");

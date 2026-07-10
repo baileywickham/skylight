@@ -17,6 +17,22 @@ export interface ListAppsResult {
   apps: AppInfo[];
 }
 
+export interface WindowInfo {
+  /** CGWindowID; absent when the daemon's window-id bridge is unavailable. */
+  window_id?: number | null;
+  title?: string | null;
+  is_focused: boolean;
+  is_minimized: boolean;
+}
+
+export interface ListWindowsResult {
+  windows: WindowInfo[];
+}
+
+export interface ListWindowsInput {
+  app: AppIdentifier;
+}
+
 export interface Screenshot {
   /** file:// path to the PNG under the daemon's shots dir ($SKYLIGHT_SHOTS_DIR). */
   url: string;

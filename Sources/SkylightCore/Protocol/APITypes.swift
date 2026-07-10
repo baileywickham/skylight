@@ -20,6 +20,31 @@ public struct ListAppsResult: Codable, Equatable {
     public init(apps: [AppInfo]) { self.apps = apps }
 }
 
+public struct WindowInfo: Codable, Equatable {
+    /// CGWindowID from the _AXUIElementGetWindow bridge; nil when the private
+    /// symbol is unavailable (window then can't be targeted by window_id).
+    public let window_id: Int?
+    public let title: String?
+    public let is_focused: Bool
+    public let is_minimized: Bool
+    public init(window_id: Int?, title: String?, is_focused: Bool, is_minimized: Bool) {
+        self.window_id = window_id
+        self.title = title
+        self.is_focused = is_focused
+        self.is_minimized = is_minimized
+    }
+}
+
+public struct ListWindowsResult: Codable, Equatable {
+    public let windows: [WindowInfo]
+    public init(windows: [WindowInfo]) { self.windows = windows }
+}
+
+public struct ListWindowsInput: Codable, Equatable {
+    public let app: String
+    public init(app: String) { self.app = app }
+}
+
 public struct ScreenshotResult: Codable, Equatable {
     public let url: String
     public let data_url: String?
