@@ -21,6 +21,31 @@ router.register("list_apps") { req in
         ?? .failure(id: req.id, code: .protocolError, message: "encoding list_apps result failed")
 }
 
+let shotsDir = ProcessInfo.processInfo.environment["SKYLIGHT_SHOTS_DIR"]
+    .map { URL(fileURLWithPath: $0) }
+    ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        .appendingPathComponent(".skylight/shots")
+let axCapture = AXCapture()
+let screenshotter = Screenshotter(shotsDir: shotsDir)
+
+router.register("get_app_state") { req in
+    do {
+        let input = try req.decodeParams(GetAppStateInput.self)
+        let app = try registry.resolve(input.app)
+        let captured = try axCapture.capture(app: app, disableDiff: input.disableDiff ?? false)
+        let shot = try awaitResult {
+            try await screenshotter.capture(window: captured.window,
+                                            includeDataURL: input.include_data_url ?? false)
+        }
+        let state = AppState(text: captured.text, screenshot: shot, diffed: captured.diffed)
+        return try Response.success(id: req.id, result: state)
+    } catch let error as SkyServiceError {
+        return .failure(id: req.id, code: error.code, message: error.message)
+    } catch {
+        return .failure(id: req.id, code: .captureFailed, message: "\(error)")
+    }
+}
+
 let server = IPCServer(socketPath: SkylightPaths.socketPath, handler: router.route)
 do {
     try server.start()
