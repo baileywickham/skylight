@@ -22,7 +22,7 @@ public func sanitizeAXText(_ raw: String, maxLength: Int = 200) -> String {
 struct LiveAXNode: TreeNode {
     let element: AXUIElement
     var identity: AnyHashable { AXIdentity(element: element) }
-    var role: String { axAttribute(element, kAXRoleAttribute) ?? "AXUnknown" }
+    var role: String { sanitizeAXText(axAttribute(element, kAXRoleAttribute) ?? "AXUnknown") }
     var title: String? {
         (axAttribute(element, kAXTitleAttribute) as String?).map { sanitizeAXText($0) }
     }
@@ -34,7 +34,10 @@ struct LiveAXNode: TreeNode {
     }
     var children: [any TreeNode] {
         let kids: [AXUIElement] = (axAttribute(element, kAXChildrenAttribute) as CFArray?)
-            .map { $0 as! [AXUIElement] } ?? []
+            .map { cfArray -> [AXUIElement] in
+                let array = cfArray as [AnyObject]
+                return array.filter { $0 is AXUIElement }.map { unsafeDowncast($0, to: AXUIElement.self) }
+            } ?? []
         return kids.map { LiveAXNode(element: $0) }
     }
 }
@@ -86,7 +89,10 @@ public final class AXCapture {
             return main
         }
         let windows: [AXUIElement] = (axAttribute(appElement, kAXWindowsAttribute) as CFArray?)
-            .map { $0 as! [AXUIElement] } ?? []
+            .map { cfArray -> [AXUIElement] in
+                let array = cfArray as [AnyObject]
+                return array.filter { $0 is AXUIElement }.map { unsafeDowncast($0, to: AXUIElement.self) }
+            } ?? []
         guard let first = windows.first else {
             throw SkyServiceError(code: .noFocusedWindow,
                                   message: "\(app.localizedName ?? "app") has no focused window")
