@@ -15,6 +15,11 @@ router.register("ping") { req in
 router.register("echo") { req in
     try! Response.success(id: req.id, result: req.params ?? JSONValue.object([:]))
 }
+let registry = AppRegistry()
+router.register("list_apps") { req in
+    (try? Response.success(id: req.id, result: registry.listApps()))
+        ?? .failure(id: req.id, code: .protocolError, message: "encoding list_apps result failed")
+}
 
 let server = IPCServer(socketPath: SkylightPaths.socketPath, handler: router.route)
 do {
