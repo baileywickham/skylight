@@ -72,17 +72,23 @@ export interface ClickInput {
   y?: number;
   mouse_button?: MouseButton;
   click_count?: number;
+  /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
+  background?: boolean;
 }
 
 export interface PressKeyInput {
   app: AppIdentifier;
   /** "+"-separated chord of X-keysym-style names, e.g. "Ctrl+Shift+t". */
   keys: string;
+  /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
+  background?: boolean;
 }
 
 export interface TypeTextInput {
   app: AppIdentifier;
   text: string;
+  /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
+  background?: boolean;
 }
 
 export interface ScrollInput {
@@ -90,12 +96,16 @@ export interface ScrollInput {
   element_index: number;
   direction: Direction;
   pages: number;
+  /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
+  background?: boolean;
 }
 
 export interface SetValueInput {
   app: AppIdentifier;
   element_index: number;
   value: string;
+  /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
+  background?: boolean;
 }
 
 export interface DragInput {
@@ -105,6 +115,8 @@ export interface DragInput {
   to_x: number;
   to_y: number;
   mouse_button?: MouseButton;
+  /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
+  background?: boolean;
 }
 
 export interface PerformSecondaryActionInput {
@@ -112,6 +124,8 @@ export interface PerformSecondaryActionInput {
   element_index: number;
   /** AX action name, e.g. "AXShowMenu". */
   action: string;
+  /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
+  background?: boolean;
 }
 
 export interface SelectTextInput {
@@ -121,4 +135,6 @@ export interface SelectTextInput {
   prefix?: string;
   suffix?: string;
   selection_type: SelectTextSelectionType;
+  /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
+  background?: boolean;
 }

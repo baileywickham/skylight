@@ -6,6 +6,7 @@
     { "method": "get_app_state", "params": { "app": "Notes", "disableDiff": true, "include_data_url": true }, "line": "{\"id\":1,\"method\":\"get_app_state\",\"params\":{\"app\":\"Notes\",\"disableDiff\":true,\"include_data_url\":true}}" },
     { "method": "get_app_state", "params": { "app": "Notes", "window_id": 4242 }, "line": "{\"id\":1,\"method\":\"get_app_state\",\"params\":{\"app\":\"Notes\",\"window_id\":4242}}" },
     { "method": "click", "params": { "app": "Notes", "element_index": 12 }, "line": "{\"id\":1,\"method\":\"click\",\"params\":{\"app\":\"Notes\",\"element_index\":12}}" },
+    { "method": "click", "params": { "app": "Notes", "element_index": 12, "background": true }, "line": "{\"id\":1,\"method\":\"click\",\"params\":{\"app\":\"Notes\",\"element_index\":12,\"background\":true}}" },
     { "method": "click", "params": { "app": "Notes", "x": 100, "y": 200, "mouse_button": "right", "click_count": 2 }, "line": "{\"id\":1,\"method\":\"click\",\"params\":{\"app\":\"Notes\",\"x\":100,\"y\":200,\"mouse_button\":\"right\",\"click_count\":2}}" },
     { "method": "press_key", "params": { "app": "Notes", "keys": "Cmd+Shift+t" }, "line": "{\"id\":1,\"method\":\"press_key\",\"params\":{\"app\":\"Notes\",\"keys\":\"Cmd+Shift+t\"}}" },
     { "method": "type_text", "params": { "app": "Notes", "text": "hello" }, "line": "{\"id\":1,\"method\":\"type_text\",\"params\":{\"app\":\"Notes\",\"text\":\"hello\"}}" },

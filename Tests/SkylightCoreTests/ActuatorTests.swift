@@ -149,4 +149,15 @@ final class ActuatorTests: XCTestCase {
         assertThrowsCode(.appNotFound, try live.click(ClickInput(app: "Definitely Not An App 9000", element_index: 0)))
         assertThrowsCode(.invalidParams, try live.click(ClickInput(app: "Finder")))
     }
+
+    func testEffectiveBackgroundPerRequestOverride() {
+        let registry = AppRegistry()
+        let capture = AXCapture()
+        let fg = Actuator(registry: registry, capture: capture, background: false)
+        let bg = Actuator(registry: registry, capture: capture, background: true)
+        XCTAssertFalse(fg.effectiveBackground(nil), "no override: daemon default (foreground)")
+        XCTAssertTrue(fg.effectiveBackground(true), "request opts INTO background")
+        XCTAssertTrue(bg.effectiveBackground(nil), "no override: daemon default (background)")
+        XCTAssertFalse(bg.effectiveBackground(false), "request opts OUT of background")
+    }
 }

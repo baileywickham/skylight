@@ -99,27 +99,45 @@ public struct ClickInput: Codable, Equatable {
     public let y: Double?
     public let mouse_button: String?   // "left" | "right" | "middle"
     public let click_count: Int?
+    /// Per-request background override: true = never activate / post per-pid,
+    /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
+    public let background: Bool?
     public init(app: String, element_index: Int? = nil, x: Double? = nil, y: Double? = nil,
-                mouse_button: String? = nil, click_count: Int? = nil) {
+                mouse_button: String? = nil, click_count: Int? = nil, background: Bool? = nil) {
         self.app = app
         self.element_index = element_index
         self.x = x
         self.y = y
         self.mouse_button = mouse_button
         self.click_count = click_count
+        self.background = background
     }
 }
 
 public struct PressKeyInput: Codable, Equatable {
     public let app: String
     public let keys: String            // "+"-separated chord, e.g. "Ctrl+Shift+t"
-    public init(app: String, keys: String) { self.app = app; self.keys = keys }
+    /// Per-request background override: true = never activate / post per-pid,
+    /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
+    public let background: Bool?
+    public init(app: String, keys: String, background: Bool? = nil) {
+        self.app = app
+        self.keys = keys
+        self.background = background
+    }
 }
 
 public struct TypeTextInput: Codable, Equatable {
     public let app: String
     public let text: String
-    public init(app: String, text: String) { self.app = app; self.text = text }
+    /// Per-request background override: true = never activate / post per-pid,
+    /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
+    public let background: Bool?
+    public init(app: String, text: String, background: Bool? = nil) {
+        self.app = app
+        self.text = text
+        self.background = background
+    }
 }
 
 public struct ScrollInput: Codable, Equatable {
@@ -127,11 +145,15 @@ public struct ScrollInput: Codable, Equatable {
     public let element_index: Int
     public let direction: String       // "up" | "down" | "left" | "right"
     public let pages: Double
-    public init(app: String, element_index: Int, direction: String, pages: Double) {
+    /// Per-request background override: true = never activate / post per-pid,
+    /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
+    public let background: Bool?
+    public init(app: String, element_index: Int, direction: String, pages: Double, background: Bool? = nil) {
         self.app = app
         self.element_index = element_index
         self.direction = direction
         self.pages = pages
+        self.background = background
     }
 }
 
@@ -139,10 +161,14 @@ public struct SetValueInput: Codable, Equatable {
     public let app: String
     public let element_index: Int
     public let value: String
-    public init(app: String, element_index: Int, value: String) {
+    /// Per-request background override: true = never activate / post per-pid,
+    /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
+    public let background: Bool?
+    public init(app: String, element_index: Int, value: String, background: Bool? = nil) {
         self.app = app
         self.element_index = element_index
         self.value = value
+        self.background = background
     }
 }
 
@@ -153,13 +179,18 @@ public struct DragInput: Codable, Equatable {
     public let to_x: Double
     public let to_y: Double
     public let mouse_button: String?
-    public init(app: String, from_x: Double, from_y: Double, to_x: Double, to_y: Double, mouse_button: String? = nil) {
+    /// Per-request background override: true = never activate / post per-pid,
+    /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
+    public let background: Bool?
+    public init(app: String, from_x: Double, from_y: Double, to_x: Double, to_y: Double, mouse_button: String? = nil,
+                background: Bool? = nil) {
         self.app = app
         self.from_x = from_x
         self.from_y = from_y
         self.to_x = to_x
         self.to_y = to_y
         self.mouse_button = mouse_button
+        self.background = background
     }
 }
 
@@ -167,10 +198,14 @@ public struct PerformSecondaryActionInput: Codable, Equatable {
     public let app: String
     public let element_index: Int
     public let action: String          // AX action name, e.g. "AXShowMenu"
-    public init(app: String, element_index: Int, action: String) {
+    /// Per-request background override: true = never activate / post per-pid,
+    /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
+    public let background: Bool?
+    public init(app: String, element_index: Int, action: String, background: Bool? = nil) {
         self.app = app
         self.element_index = element_index
         self.action = action
+        self.background = background
     }
 }
 
@@ -181,13 +216,17 @@ public struct SelectTextInput: Codable, Equatable {
     public let prefix: String?
     public let suffix: String?
     public let selection_type: String  // "select" | "cursor_before" | "cursor_after"
+    /// Per-request background override: true = never activate / post per-pid,
+    /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
+    public let background: Bool?
     public init(app: String, element_index: Int, text: String, prefix: String? = nil,
-                suffix: String? = nil, selection_type: String) {
+                suffix: String? = nil, selection_type: String, background: Bool? = nil) {
         self.app = app
         self.element_index = element_index
         self.text = text
         self.prefix = prefix
         self.suffix = suffix
         self.selection_type = selection_type
+        self.background = background
     }
 }
