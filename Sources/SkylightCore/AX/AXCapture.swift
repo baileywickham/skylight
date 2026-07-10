@@ -107,8 +107,10 @@ public final class AXCapture {
         return first
     }
 
-    /// Full-tree capture. Milestone 1: diffing is OFF — disableDiff is accepted
-    /// but a no-op; previous lines are still recorded so M2 can honor it.
+    /// Capture with diff-by-default (Milestone 2): when a previous capture of
+    /// the same app exists and `disableDiff == false`, returns only the
+    /// added/removed/changed lines keyed by sticky index; otherwise the full
+    /// tree. Either way the baseline is refreshed to this capture's lines.
     public func capture(app: NSRunningApplication, disableDiff: Bool) throws -> CaptureResult {
         guard Permissions.status().accessibility else {
             let instructions = Permissions.instructions(
@@ -135,10 +137,21 @@ public final class AXCapture {
         let geometry = try captureGeometry(for: window)
         let serialized = AXTreeSerializer(caps: caps).serialize(root: LiveAXNode(element: window), map: s.map)
 
+        // Milestone 2: diff-by-default on the sticky index map; disableDiff honored.
+        let outputText: String
+        let diffed: Bool
+        if !disableDiff, let previous = s.previousLines {
+            outputText = diffTrees(previous: previous, current: serialized.lines)
+            diffed = true
+        } else {
+            outputText = serialized.text
+            diffed = false
+        }
+
         s.previousLines = serialized.lines
         s.latestGeometry = geometry
-        return CaptureResult(text: serialized.text, lines: serialized.lines,
-                             window: window, geometry: geometry, diffed: false)
+        return CaptureResult(text: outputText, lines: serialized.lines,
+                             window: window, geometry: geometry, diffed: diffed)
     }
 
     /// Resolves an element_index back to its live AXUIElement for action calls.
