@@ -54,11 +54,25 @@ final class SerializerTests: XCTestCase {
     }
 
     func testDepthCapEmitsTruncationMarker() {
-        var leaf = FixtureNode("leaf", "AXGroup")
-        for i in (0..<5).reversed() { leaf = FixtureNode("g\(i)", "AXGroup", kids: [leaf]) }
+        // Chain of 6 levels (depth 0...5), each with a unique title so we can prove
+        // *which* levels made it into the output — node `id`s are never serialized,
+        // so asserting on "leaf" alone (a bare id) would pass even if the serializer
+        // kept descending past the cap after emitting the marker.
+        var leaf = FixtureNode("leaf", "AXGroup", title: "Depth5")
+        for i in (0..<5).reversed() { leaf = FixtureNode("g\(i)", "AXGroup", title: "Depth\(i)", kids: [leaf]) }
         let out = AXTreeSerializer(caps: TreeCaps(maxDepth: 3, maxNodes: 5000)).serialize(root: leaf, map: ElementIndexMap())
+
+        // With maxDepth: 3, depths 0, 1, 2 are emitted as node lines; depth 3 is where
+        // the walk hits `depth >= caps.maxDepth` and truncates instead of emitting.
+        XCTAssertEqual(out.lines.filter { $0.index >= 0 }.count, 3,
+                       "exactly the 3 allowed levels (depth 0, 1, 2) should be emitted as node lines")
+        XCTAssertTrue(out.text.contains("Depth2"),
+                     "the deepest ALLOWED node (depth == maxDepth - 1) must still be emitted")
+        XCTAssertFalse(out.text.contains("Depth3"),
+                      "the first node AT the cap (depth == maxDepth) must be truncated, not emitted")
+        XCTAssertFalse(out.text.contains("Depth4"))
+        XCTAssertFalse(out.text.contains("Depth5"))
         XCTAssertTrue(out.text.contains("[…] truncated (max depth 3 reached)"))
-        XCTAssertFalse(out.text.contains("leaf"))
     }
 
     func testNodeCapEmitsTruncationMarker() {
