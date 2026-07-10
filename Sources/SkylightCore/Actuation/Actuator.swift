@@ -25,6 +25,24 @@ public func utf16Chunks(_ text: String, maxUnits: Int = 20) -> [[UInt16]] {
     return chunks
 }
 
+/// Splits a total pixel scroll into same-sign steps of at most `maxStep` px.
+/// One synthesized wheel event carrying a whole page of delta is silently
+/// dropped by the window server often enough to make scroll flaky (verified
+/// live); a burst of small deltas — like a physical wheel — lands reliably.
+public func scrollDeltas(total: Int32, maxStep: Int32 = 80) -> [Int32] {
+    precondition(maxStep > 0, "maxStep must be positive")
+    guard total != 0 else { return [] }
+    let sign: Int32 = total > 0 ? 1 : -1
+    var remaining = abs(total)
+    var steps: [Int32] = []
+    while remaining > 0 {
+        let step = min(remaining, maxStep)
+        steps.append(step * sign)
+        remaining -= step
+    }
+    return steps
+}
+
 /// Performs the API's actions against live apps. NOT thread-safe (it shares
 /// AXCapture's per-app index map): all calls must stay on the daemon's global
 /// serial actuation queue, where the router already runs handlers.
@@ -141,12 +159,26 @@ public final class Actuator {
         let chord = try parseKeyChord(input.keys)
         let (app, window, _) = try target(input.app, needsGeometry: false)
         activateAndRaise(app: app, window: window)
-        let down = CGEvent(keyboardEventSource: nil, virtualKey: chord.keyCode, keyDown: true)
-        let up = CGEvent(keyboardEventSource: nil, virtualKey: chord.keyCode, keyDown: false)
-        down?.flags = chord.flags
-        up?.flags = chord.flags
-        post(down)
-        post(up)
+        // The chord parse yields ANSI key codes; remap character keys to the
+        // ACTIVE keyboard layout (on e.g. Dvorak the ANSI "c" code types "j",
+        // so Cmd+c would fire an unbound shortcut and silently no-op).
+        let layoutChord = KeyChord(keyCode: layoutKeyCode(forAnsi: chord.keyCode), flags: chord.flags)
+        // Post the chord as a physical typist would: modifiers held as their own
+        // flagsChanged events around the main key (see keyEventSequence), which
+        // is how real key equivalents are delivered to NSMenu. One shared source
+        // keeps the whole sequence in a single event stream.
+        let source = CGEventSource(stateID: .hidSystemState)
+        for step in keyEventSequence(for: layoutChord) {
+            let event = CGEvent(keyboardEventSource: source, virtualKey: step.keyCode, keyDown: step.keyDown)
+            if isModifierKeyCode(step.keyCode) {
+                // Physical modifiers arrive as flagsChanged, never keyDown/keyUp;
+                // menu-equivalent matching ignores modifier keyDowns.
+                event?.type = .flagsChanged
+            }
+            event?.flags = step.flags
+            post(event)
+            usleep(5_000) // real chords have inter-key spacing; keeps order stable
+        }
         postActionSleep()
         return ActionResult(done: true)
     }
@@ -186,24 +218,28 @@ public final class Actuator {
         let window = try capture.focusedWindow(of: app)
         activateAndRaise(app: app, window: window)
 
-        // Move the cursor over the element's center, then post pixel scrolls of
-        // one element-height/width per page.
-        var positionRef: CFTypeRef?
-        var sizeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionRef) == .success,
-              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success else {
+        // Move the cursor over the element's VISIBLE center, then post pixel
+        // scrolls of one visible-height/width per page. Scrollable content
+        // elements report full-content-sized AX frames extending far past the
+        // window, so the raw frame center can lie over a different window and
+        // the wheel event would scroll that one instead; clamp to the window.
+        guard let elementFrame = axFrame(of: element) else {
             throw SkyServiceError(code: .elementNotActionable, message: "scroll[\(input.element_index)]: element has no frame")
         }
-        var origin = CGPoint.zero
-        var size = CGSize.zero
-        AXValueGetValue(positionRef as! AXValue, .cgPoint, &origin)
-        AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
-        let center = CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
+        let frame = axFrame(of: window)
+            .map { visibleScrollFrame(elementFrame: elementFrame, windowFrame: $0) } ?? elementFrame
+        let center = CGPoint(x: frame.midX, y: frame.midY)
         post(CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: center, mouseButton: .left))
-        let page = Int32((vertical ? size.height : size.width) * sign * input.pages)
-        let scrollEvent = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
-                                  wheel1: vertical ? page : 0, wheel2: vertical ? 0 : page, wheel3: 0)
-        post(scrollEvent)
+        usleep(50_000) // let the pointer move settle before the wheel events
+        let total = Int32((vertical ? frame.height : frame.width) * sign * input.pages)
+        let source = CGEventSource(stateID: .hidSystemState)
+        for delta in scrollDeltas(total: total) {
+            let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 1,
+                                wheel1: vertical ? delta : 0, wheel2: vertical ? 0 : delta, wheel3: 0)
+            event?.location = center // route by the clamped point, immune to cursor races
+            post(event)
+            usleep(10_000)
+        }
         postActionSleep()
         return ActionResult(done: true)
     }

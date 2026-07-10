@@ -66,6 +66,17 @@ final class IPCServerTests: XCTestCase {
         server.stop()
     }
 
+    func testStopUnlinksSocketFile() throws {
+        // Clean shutdown (the SIGTERM path in main.swift calls stop()) must not
+        // leave a stale socket file behind for the next start to clean up.
+        let path = tempSocketPath()
+        let server = IPCServer(socketPath: path, handler: { try! Response.success(id: $0.id, result: ["pong": true]) })
+        try server.start()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path))
+        server.stop()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path))
+    }
+
     func testLiveSocketRefusesSecondServer() throws {
         let path = tempSocketPath()
         let first = IPCServer(socketPath: path, handler: { try! Response.success(id: $0.id, result: ["pong": true]) })

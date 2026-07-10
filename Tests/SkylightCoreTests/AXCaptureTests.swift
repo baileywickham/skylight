@@ -107,4 +107,55 @@ final class AXCaptureTests: XCTestCase {
         XCTAssertEqual(sanitizeAXText(String(repeating: "y", count: 200)),
                        String(repeating: "y", count: 200))
     }
+
+    // MARK: - Label fallback (pure function; SwiftUI/Calculator buttons expose
+    // their name via AXDescription/AXHelp/AXIdentifier, not AXTitle)
+
+    func testAXTitleWinsWhenPresent() {
+        XCTAssertEqual(fallbackAXLabel(title: "Save", value: nil, description: "desc",
+                                       help: "help", identifier: "id"), "Save")
+        // A present title wins even when a value exists too.
+        XCTAssertEqual(fallbackAXLabel(title: "Volume", value: "0.5", description: "d",
+                                       help: nil, identifier: nil), "Volume")
+    }
+
+    func testFallbackOrderIsDescriptionThenHelpThenIdentifier() {
+        XCTAssertEqual(fallbackAXLabel(title: nil, value: nil, description: "Seven",
+                                       help: "h", identifier: "i"), "Seven")
+        XCTAssertEqual(fallbackAXLabel(title: "", value: nil, description: nil,
+                                       help: "Adds numbers", identifier: "i"), "Adds numbers")
+        XCTAssertEqual(fallbackAXLabel(title: nil, value: "", description: "",
+                                       help: nil, identifier: "equals"), "equals")
+        XCTAssertNil(fallbackAXLabel(title: nil, value: nil, description: nil,
+                                     help: nil, identifier: nil))
+    }
+
+    func testNoFallbackWhenValueAlreadyIdentifiesTheNode() {
+        // A titleless node with a non-empty value renders `value="…"` already;
+        // don't add a fallback label on top (keeps normal text fields unchanged).
+        XCTAssertNil(fallbackAXLabel(title: nil, value: "hello world", description: "desc",
+                                     help: "help", identifier: "id"))
+    }
+
+    func testFallbackAccessorsAreLazyWhenTitleResolves() {
+        // The fallback attributes cost extra AX round-trips per node; they must
+        // not be evaluated when the title already resolves.
+        var touched = false
+        func probe() -> String? { touched = true; return "x" }
+        XCTAssertEqual(fallbackAXLabel(title: "Title", value: nil, description: probe(),
+                                       help: probe(), identifier: probe()), "Title")
+        XCTAssertFalse(touched)
+    }
+
+    // MARK: - Web-area retry predicate (Chromium first capture after enablement)
+
+    func testNeedsWebAreaRetryOnlyRightAfterEnablement() {
+        let noWeb = [TreeLine(index: 0, depth: 0, text: "[0] AXWindow \"Tab\"")]
+        let withWeb = [TreeLine(index: 0, depth: 0, text: "[0] AXWindow \"Tab\""),
+                       TreeLine(index: 1, depth: 1, text: "[1] AXWebArea")]
+        XCTAssertTrue(needsWebAreaRetry(enablementJustApplied: true, lines: noWeb))
+        XCTAssertFalse(needsWebAreaRetry(enablementJustApplied: true, lines: withWeb))
+        XCTAssertFalse(needsWebAreaRetry(enablementJustApplied: false, lines: noWeb))
+        XCTAssertFalse(needsWebAreaRetry(enablementJustApplied: false, lines: withWeb))
+    }
 }

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SkylightCore
 
@@ -123,5 +124,29 @@ do {
     exit(1)
 }
 
-signal(SIGTERM) { _ in exit(0) } // kill switch
-dispatchMain()
+// Kill switch with cleanup: a plain signal-handler `exit(0)` would leave a
+// stale socket file behind. SIG_IGN + a main-queue DispatchSource lets clean
+// shutdown run normal code (stop the server, unlink the socket) safely.
+signal(SIGTERM, SIG_IGN)
+let sigterm = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+sigterm.setEventHandler {
+    server.stop() // closes the listen fd and unlinks the socket
+    exit(0)
+}
+sigterm.resume()
+
+// The MAIN RUN LOOP must be pumped (dispatchMain() does not pump it):
+// NSWorkspace.shared.runningApplications and NSRunningApplication properties
+// (isActive, …) only refresh while the main run loop runs in a common mode.
+// Without it, apps launched after daemon startup stay invisible to
+// list_apps/get_app_state forever and is_frontmost never updates. A bare
+// RunLoop.main.run() is NOT enough (verified live): the workspace update
+// machinery only runs in a process with an NSApplication connection, so run as
+// an activation-policy-.accessory NSApplication — no Dock icon, no UI, but a
+// live NSWorkspace. IPC accept and all actuation stay on their own background
+// threads / the single global serial actuation queue; only the run-loop pump
+// lives here.
+let nsApp = NSApplication.shared
+nsApp.setActivationPolicy(.accessory)
+_ = NSWorkspace.shared.runningApplications // register update machinery on this loop
+nsApp.run()

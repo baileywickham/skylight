@@ -83,4 +83,86 @@ final class KeyChordTests: XCTestCase {
             XCTAssertEqual((error as? SkyServiceError)?.code, .invalidParams)
         }
     }
+
+    // MARK: - layoutKeyCode (chords name CHARACTERS; events carry HARDWARE codes)
+    //
+    // On a non-QWERTY layout (e.g. Dvorak) posting the ANSI code for "c" types
+    // "j", so Cmd+c fires an unbound shortcut and silently no-ops. Character
+    // keys must be remapped through the active layout; positional keys must not.
+
+    func testLayoutKeyCodeRemapsCharacterKeys() {
+        // Dvorak places "c" on the ANSI "i" key (34) and "v" on ">"/"." (47).
+        let dvorakish: [Character: CGKeyCode] = ["c": 34, "v": 47, "a": 0]
+        XCTAssertEqual(layoutKeyCode(forAnsi: 8, layoutMap: dvorakish), 34)  // c
+        XCTAssertEqual(layoutKeyCode(forAnsi: 9, layoutMap: dvorakish), 47)  // v
+        XCTAssertEqual(layoutKeyCode(forAnsi: 0, layoutMap: dvorakish), 0)   // a (same key)
+    }
+
+    func testLayoutKeyCodePassesPositionalKeysThrough() {
+        let bogus: [Character: CGKeyCode] = ["c": 99]
+        XCTAssertEqual(layoutKeyCode(forAnsi: 36, layoutMap: bogus), 36)   // Return
+        XCTAssertEqual(layoutKeyCode(forAnsi: 53, layoutMap: bogus), 53)   // Escape
+        XCTAssertEqual(layoutKeyCode(forAnsi: 123, layoutMap: bogus), 123) // Left
+        XCTAssertEqual(layoutKeyCode(forAnsi: 49, layoutMap: bogus), 49)   // Space
+    }
+
+    func testLayoutKeyCodeFallsBackWhenLayoutLacksCharacter() {
+        XCTAssertEqual(layoutKeyCode(forAnsi: 8, layoutMap: [:]), 8)
+    }
+
+    func testCurrentKeyboardLayoutMapIsUsable() {
+        // Layout-agnostic sanity: every Latin-capable layout types these.
+        let map = currentKeyboardLayoutMap()
+        try? XCTSkipIf(map.isEmpty, "no keyboard layout data available on this runner")
+        XCTAssertNotNil(map["a"])
+        XCTAssertEqual(map["1"], 18) // number row beats keypad (lowest code wins)
+    }
+
+    // MARK: - keyEventSequence (real held modifiers around the main key)
+    //
+    // NSMenu key equivalents (Cmd+c, Cmd+v, …) only fire when the modifier is
+    // delivered as its own held key event, not just as flags on the main key.
+
+    func testPlainKeySequenceHasNoModifierEvents() throws {
+        let steps = keyEventSequence(for: try parseKeyChord("Return"))
+        XCTAssertEqual(steps, [
+            KeyEventStep(keyCode: 36, keyDown: true, flags: []),
+            KeyEventStep(keyCode: 36, keyDown: false, flags: []),
+        ])
+    }
+
+    func testCommandCSequenceHoldsCommandAroundKey() throws {
+        let steps = keyEventSequence(for: try parseKeyChord("Cmd+c"))
+        XCTAssertEqual(steps, [
+            KeyEventStep(keyCode: 55, keyDown: true, flags: [.maskCommand]), // Cmd down
+            KeyEventStep(keyCode: 8, keyDown: true, flags: [.maskCommand]),  // c down
+            KeyEventStep(keyCode: 8, keyDown: false, flags: [.maskCommand]), // c up
+            KeyEventStep(keyCode: 55, keyDown: false, flags: []),            // Cmd up
+        ])
+    }
+
+    func testMultiModifierSequenceAccumulatesAndReleasesInReverse() throws {
+        let steps = keyEventSequence(for: try parseKeyChord("Ctrl+Shift+t"))
+        XCTAssertEqual(steps, [
+            KeyEventStep(keyCode: 59, keyDown: true, flags: [.maskControl]),
+            KeyEventStep(keyCode: 56, keyDown: true, flags: [.maskControl, .maskShift]),
+            KeyEventStep(keyCode: 17, keyDown: true, flags: [.maskControl, .maskShift]),
+            KeyEventStep(keyCode: 17, keyDown: false, flags: [.maskControl, .maskShift]),
+            KeyEventStep(keyCode: 56, keyDown: false, flags: [.maskControl]),
+            KeyEventStep(keyCode: 59, keyDown: false, flags: []),
+        ])
+    }
+
+    func testAllFourModifiersUseDistinctKeyCodesAndFullyRelease() throws {
+        let steps = keyEventSequence(for: try parseKeyChord("Cmd+Ctrl+Option+Shift+a"))
+        XCTAssertEqual(steps.count, 10) // 4 downs + key down/up + 4 ups
+        let modifierDowns = steps.prefix(4).map(\.keyCode)
+        XCTAssertEqual(Set(modifierDowns), [55, 56, 58, 59])
+        // Main key carries the full combined flags.
+        XCTAssertEqual(steps[4].keyCode, 0)
+        XCTAssertEqual(steps[4].flags, [.maskCommand, .maskControl, .maskAlternate, .maskShift])
+        // Releases mirror the downs in reverse order, ending with no flags held.
+        XCTAssertEqual(steps.suffix(4).map(\.keyCode), modifierDowns.reversed())
+        XCTAssertEqual(steps.last?.flags, [])
+    }
 }
