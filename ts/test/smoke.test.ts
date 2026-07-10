@@ -78,8 +78,9 @@ describe.runIf(gated)("live smoke (TextEdit)", () => {
     expect(before).toBeDefined();
     expect(before!.text).toContain("AXWindow");
     expect(before!.text).not.toContain(MARKER);
-    expect(before!.screenshot.url.startsWith("file://")).toBe(true);
-    expect(before!.screenshot.width).toBeGreaterThan(0);
+    expect(before!.screenshot).toBeTruthy();
+    expect(before!.screenshot!.url.startsWith("file://")).toBe(true);
+    expect(before!.screenshot!.width).toBeGreaterThan(0);
 
     await sky.type_text({ app: "TextEdit", text: MARKER });
     const after = await sky.get_app_state({ app: "TextEdit" });

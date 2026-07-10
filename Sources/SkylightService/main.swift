@@ -101,6 +101,10 @@ router.register("get_app_state", handle("get_app_state", GetAppStateInput.self) 
         }
     } catch let error as SkyServiceError {
         shotError = "\(error.code.rawValue): \(error.message)"
+    } catch {
+        // SCK/Cocoa errors are not SkyServiceError — normalize so a transient
+        // ScreenCaptureKit failure also degrades to AX-only instead of failing.
+        shotError = "capture_failed: \(error)"
     }
     axCapture.commitBaseline(captured, forPid: app.processIdentifier)
     auditLog.record(method: "get_app_state", target: input.app,
