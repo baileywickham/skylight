@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SkylightCore
 
@@ -17,8 +18,15 @@ let env = ProcessInfo.processInfo.environment
 let shotsDir = env["SKYLIGHT_SHOTS_DIR"].map { URL(fileURLWithPath: $0) }
     ?? SkylightPaths.shotsDir
 let postActionSleepMs = env["SKYLIGHT_POST_ACTION_SLEEP_MS"].flatMap(Int.init) ?? 100
+// SKYLIGHT_BACKGROUND=1: run actions without stealing focus — activation is
+// skipped for every action and synthetic events are posted per-pid
+// (CGEventPostToPid) instead of to the session tap. Default OFF preserves the
+// activation-first behavior exactly. See Actuation/Activation.swift for the
+// best-effort caveats on keyboard/coordinate input to non-frontmost apps.
+let background = ["1", "true", "yes"].contains((env["SKYLIGHT_BACKGROUND"] ?? "").lowercased())
 let screenshotter = Screenshotter(shotsDir: shotsDir)
-let actuator = Actuator(registry: registry, capture: axCapture, postActionSleepMs: postActionSleepMs)
+let actuator = Actuator(registry: registry, capture: axCapture,
+                        postActionSleepMs: postActionSleepMs, background: background)
 
 /// Wraps a throwing handler: SkyServiceError → structured error response,
 /// anything else → capture_failed with the description.
@@ -117,11 +125,36 @@ for line in Permissions.instructions(for: status) {
 let server = IPCServer(socketPath: SkylightPaths.socketPath, handler: router.route)
 do {
     try server.start()
-    FileHandle.standardError.write(Data("SkylightService \(SkylightVersion.current) listening at \(SkylightPaths.socketPath)\n".utf8))
+    let mode = background ? " (background mode: actions will not steal focus)" : ""
+    FileHandle.standardError.write(Data("SkylightService \(SkylightVersion.current) listening at \(SkylightPaths.socketPath)\(mode)\n".utf8))
 } catch {
     FileHandle.standardError.write(Data("fatal: \(error)\n".utf8))
     exit(1)
 }
 
-signal(SIGTERM) { _ in exit(0) } // kill switch
-dispatchMain()
+// Kill switch with cleanup: a plain signal-handler `exit(0)` would leave a
+// stale socket file behind. SIG_IGN + a main-queue DispatchSource lets clean
+// shutdown run normal code (stop the server, unlink the socket) safely.
+signal(SIGTERM, SIG_IGN)
+let sigterm = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+sigterm.setEventHandler {
+    server.stop() // closes the listen fd and unlinks the socket
+    exit(0)
+}
+sigterm.resume()
+
+// The MAIN RUN LOOP must be pumped (dispatchMain() does not pump it):
+// NSWorkspace.shared.runningApplications and NSRunningApplication properties
+// (isActive, …) only refresh while the main run loop runs in a common mode.
+// Without it, apps launched after daemon startup stay invisible to
+// list_apps/get_app_state forever and is_frontmost never updates. A bare
+// RunLoop.main.run() is NOT enough (verified live): the workspace update
+// machinery only runs in a process with an NSApplication connection, so run as
+// an activation-policy-.accessory NSApplication — no Dock icon, no UI, but a
+// live NSWorkspace. IPC accept and all actuation stay on their own background
+// threads / the single global serial actuation queue; only the run-loop pump
+// lives here.
+let nsApp = NSApplication.shared
+nsApp.setActivationPolicy(.accessory)
+_ = NSWorkspace.shared.runningApplications // register update machinery on this loop
+nsApp.run()

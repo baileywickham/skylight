@@ -59,6 +59,11 @@ func usage() {
 
     Type declarations: ts/sky.d.ts. Config via SKYLIGHT_CONFIG_PATH
     ({ socket_path, post_action_sleep_ms, shots_dir }).
+
+    Background mode: start the DAEMON with SKYLIGHT_BACKGROUND=1 and actions run
+    without stealing focus (no activation; synthetic events go per-pid via
+    CGEventPostToPid). Reliable for element_index actions; best-effort for
+    coordinate clicks / keyboard (menu shortcuts like Cmd+c need frontmost).
     """)
 }
 

@@ -17,6 +17,23 @@ public func sanitizeAXText(_ raw: String, maxLength: Int = 200) -> String {
     return String(cleaned.prefix(maxLength)) + "…"
 }
 
+/// Picks the label for a node. AXTitle wins; when the title AND the value are
+/// both empty (an otherwise anonymous node, e.g. Calculator's SwiftUI buttons,
+/// which expose their name via other attributes), falls back to AXDescription,
+/// then AXHelp, then AXIdentifier. The fallbacks are autoclosures so the extra
+/// AX round-trips only happen for title-less nodes.
+public func fallbackAXLabel(title: String?, value: String?,
+                            description: @autoclosure () -> String?,
+                            help: @autoclosure () -> String?,
+                            identifier: @autoclosure () -> String?) -> String? {
+    if let title, !title.isEmpty { return title }
+    if let value, !value.isEmpty { return nil } // value renders separately; node isn't anonymous
+    if let description = description(), !description.isEmpty { return description }
+    if let help = help(), !help.isEmpty { return help }
+    if let identifier = identifier(), !identifier.isEmpty { return identifier }
+    return nil
+}
+
 /// Live TreeNode over an AXUIElement. Children are fetched eagerly at init so
 /// the serializer's walk stays pure.
 struct LiveAXNode: TreeNode {
@@ -24,7 +41,12 @@ struct LiveAXNode: TreeNode {
     var identity: AnyHashable { AXIdentity(element: element) }
     var role: String { sanitizeAXText(axAttribute(element, kAXRoleAttribute) ?? "AXUnknown") }
     var title: String? {
-        (axAttribute(element, kAXTitleAttribute) as String?).map { sanitizeAXText($0) }
+        fallbackAXLabel(title: axAttribute(element, kAXTitleAttribute),
+                        value: value,
+                        description: axAttribute(self.element, kAXDescriptionAttribute),
+                        help: axAttribute(self.element, kAXHelpAttribute),
+                        identifier: axAttribute(self.element, kAXIdentifierAttribute))
+            .map { sanitizeAXText($0) }
     }
     var value: String? {
         let raw: CFTypeRef? = axAttribute(element, kAXValueAttribute)
@@ -44,6 +66,13 @@ struct LiveAXNode: TreeNode {
             } ?? []
         return kids.map { LiveAXNode(element: $0) }
     }
+}
+
+/// True when the first capture after AX enablement (Chromium's
+/// AXManualAccessibility/AXEnhancedUserInterface) produced a tree without any
+/// web content — the settle was too short and one re-walk is warranted.
+public func needsWebAreaRetry(enablementJustApplied: Bool, lines: [TreeLine]) -> Bool {
+    enablementJustApplied && !lines.contains { $0.text.contains("AXWebArea") }
 }
 
 public struct CaptureResult {
@@ -78,11 +107,14 @@ final class AppCaptureState {
 public final class AXCapture {
     private let caps: TreeCaps
     private let messagingTimeout: Float
+    private let webAreaRetrySeconds: TimeInterval
     private var stateByPid: [pid_t: AppCaptureState] = [:]
 
-    public init(caps: TreeCaps = .standard, messagingTimeout: Float = 0.25) {
+    public init(caps: TreeCaps = .standard, messagingTimeout: Float = 0.25,
+                webAreaRetrySeconds: TimeInterval = 2.5) {
         self.caps = caps
         self.messagingTimeout = messagingTimeout
+        self.webAreaRetrySeconds = webAreaRetrySeconds
     }
 
     private func state(for pid: pid_t) -> AppCaptureState {
@@ -141,18 +173,38 @@ public final class AXCapture {
         AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
 
         let s = state(for: pid)
+        var enablementJustApplied = false
         if !s.enablementDone {
             // Chromium/Electron apps expose an empty tree until an assistive
-            // client flips these; harmless for apps that ignore them.
+            // client flips these; harmless for apps that ignore them. (The set
+            // return codes cannot identify Chromium — verified live: Chrome
+            // rejects both sets just like TextEdit yet still honors them — so
+            // the retry below is gated only on this being the first capture.)
             AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
             AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
             s.enablementDone = true
+            enablementJustApplied = true
             usleep(300_000) // settle before the first real walk
         }
 
         let window = try focusedWindow(of: app)
         let geometry = try captureGeometry(for: window)
-        let serialized = AXTreeSerializer(caps: caps).serialize(root: LiveAXNode(element: window), map: s.map)
+        var serialized = AXTreeSerializer(caps: caps).serialize(root: LiveAXNode(element: window), map: s.map)
+        // Right after enablement Chromium can take a while (>1s cold, verified
+        // live) to publish its web content, leaving the first walk without an
+        // AXWebArea. Poll with a bounded budget — only on the enablement
+        // capture and only while web content is absent — instead of a long
+        // unconditional delay on every capture. (Chromium can't be identified
+        // cheaply: its app element rejects/lists the same attributes as AppKit
+        // apps, so non-web apps pay this budget once, on first capture only.)
+        if enablementJustApplied {
+            let deadline = Date().addingTimeInterval(webAreaRetrySeconds)
+            while needsWebAreaRetry(enablementJustApplied: true, lines: serialized.lines),
+                  Date() < deadline {
+                usleep(500_000)
+                serialized = AXTreeSerializer(caps: caps).serialize(root: LiveAXNode(element: window), map: s.map)
+            }
+        }
 
         // Milestone 2: diff-by-default on the sticky index map; disableDiff honored.
         let outputText: String

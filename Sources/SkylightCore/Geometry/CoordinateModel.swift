@@ -29,26 +29,44 @@ public func axAttribute<T>(_ element: AXUIElement, _ name: String) -> T? {
     return value as? T
 }
 
-/// Reads the live window frame origin (global points, top-left origin — matching
-/// CGEvent space) and the backing scale of the display the window is on.
-public func captureGeometry(for window: AXUIElement) throws -> CaptureGeometry {
+/// Reads an element's live frame (global points, top-left origin — matching
+/// CGEvent space) from its AX position/size attributes.
+public func axFrame(of element: AXUIElement) -> CGRect? {
     var positionRef: CFTypeRef?
     var sizeRef: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &positionRef) == .success,
-          AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeRef) == .success else {
-        throw SkyServiceError(code: .captureFailed, message: "window has no readable frame")
+    guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionRef) == .success,
+          AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success else {
+        return nil
     }
     var origin = CGPoint.zero
     var size = CGSize.zero
     AXValueGetValue(positionRef as! AXValue, .cgPoint, &origin)
     AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
+    return CGRect(origin: origin, size: size)
+}
 
+/// The part of a scroll target's frame that wheel events may aim at: its
+/// intersection with the window. Scrollable content elements report
+/// full-content-sized frames extending past the window, so the raw frame
+/// center can lie over a DIFFERENT window and the wheel event would scroll
+/// that one. Identity when the element is fully on-window; falls back to the
+/// window frame itself when the two do not intersect at all (stale frame).
+public func visibleScrollFrame(elementFrame: CGRect, windowFrame: CGRect) -> CGRect {
+    let visible = elementFrame.intersection(windowFrame)
+    return visible.isEmpty ? windowFrame : visible
+}
+
+/// Reads the live window frame origin (global points, top-left origin — matching
+/// CGEvent space) and the backing scale of the display the window is on.
+public func captureGeometry(for window: AXUIElement) throws -> CaptureGeometry {
+    guard let windowRect = axFrame(of: window) else {
+        throw SkyServiceError(code: .captureFailed, message: "window has no readable frame")
+    }
     // AX positions are top-left-origin global coordinates; NSScreen frames are
     // bottom-left-origin. Flip to find the screen containing the window's center.
-    let windowRect = CGRect(origin: origin, size: size)
     let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
     let center = CGPoint(x: windowRect.midX, y: primaryHeight - windowRect.midY)
     let screen = NSScreen.screens.first(where: { $0.frame.contains(center) }) ?? NSScreen.main
     let scale = screen?.backingScaleFactor ?? 2.0
-    return CaptureGeometry(windowOriginX: origin.x, windowOriginY: origin.y, scale: scale)
+    return CaptureGeometry(windowOriginX: windowRect.origin.x, windowOriginY: windowRect.origin.y, scale: scale)
 }

@@ -96,4 +96,57 @@ final class ActuatorTests: XCTestCase {
         assertThrowsCode(.staleElementIndex, try actuator.selectText(SelectTextInput(
             app: "Finder", element_index: 777, text: "hello", selection_type: "select")))
     }
+
+    // MARK: - scrollDeltas (one big wheel event is dropped often; bursts land)
+
+    func testScrollDeltasSplitPreservesSumAndCapsSteps() {
+        let down = scrollDeltas(total: -500, maxStep: 80)
+        XCTAssertEqual(down.reduce(0, +), -500)
+        XCTAssertTrue(down.allSatisfy { $0 < 0 && $0 >= -80 })
+        XCTAssertEqual(down, [-80, -80, -80, -80, -80, -80, -20])
+
+        let up = scrollDeltas(total: 165, maxStep: 80)
+        XCTAssertEqual(up, [80, 80, 5])
+    }
+
+    func testScrollDeltasEdgeCases() {
+        XCTAssertTrue(scrollDeltas(total: 0).isEmpty)
+        XCTAssertEqual(scrollDeltas(total: 5, maxStep: 80), [5])   // below one step
+        XCTAssertEqual(scrollDeltas(total: -80, maxStep: 80), [-80]) // exact multiple
+    }
+
+    // MARK: - Background mode (SKYLIGHT_BACKGROUND=1) decision logic
+
+    func testShouldActivateOnlyInDefaultMode() {
+        XCTAssertTrue(shouldActivate(background: false),
+                      "default mode must keep the activation-first behavior")
+        XCTAssertFalse(shouldActivate(background: true),
+                       "background mode must never activate the target app")
+    }
+
+    func testEventDestinationRoutesPerPidOnlyInBackgroundMode() {
+        XCTAssertEqual(eventDestination(background: false, targetPid: 4321), .session,
+                       "default mode posts to the session tap (frontmost app)")
+        XCTAssertEqual(eventDestination(background: true, targetPid: 4321), .pid(4321),
+                       "background mode posts straight to the target app's pid")
+    }
+
+    func testBackgroundActuatorKeepsValidationAndPauseBehavior() throws {
+        // Background mode changes only activation/delivery — guards run first
+        // and are identical in both modes.
+        let pauseFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SKYLIGHT_PAUSE-\(UUID())")
+        FileManager.default.createFile(atPath: pauseFile.path, contents: nil)
+        let paused = Actuator(registry: AppRegistry(), capture: AXCapture(),
+                              postActionSleepMs: 0, pauseFile: pauseFile, background: true)
+        assertThrowsCode(.actuationPaused, try paused.click(ClickInput(app: "Finder", element_index: 0)))
+
+        let live = Actuator(registry: AppRegistry(), capture: AXCapture(),
+                            postActionSleepMs: 0,
+                            pauseFile: FileManager.default.temporaryDirectory
+                                .appendingPathComponent("SKYLIGHT_PAUSE-\(UUID())"),
+                            background: true)
+        assertThrowsCode(.appNotFound, try live.click(ClickInput(app: "Definitely Not An App 9000", element_index: 0)))
+        assertThrowsCode(.invalidParams, try live.click(ClickInput(app: "Finder")))
+    }
 }
