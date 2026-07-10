@@ -54,15 +54,17 @@ public final class Actuator {
     /// Daemon-wide default (SKYLIGHT_BACKGROUND=1). Each action may override
     /// per request via its optional `background` field.
     private let defaultBackground: Bool
+    private let approvals: Approvals
 
     public init(registry: AppRegistry, capture: AXCapture,
                 postActionSleepMs: Int = 100, pauseFile: URL = SkylightPaths.pauseFile,
-                background: Bool = false) {
+                background: Bool = false, approvals: Approvals = Approvals()) {
         self.registry = registry
         self.capture = capture
         self.postActionSleepMs = postActionSleepMs
         self.pauseFile = pauseFile
         self.defaultBackground = background
+        self.approvals = approvals
     }
 
     /// Per-request override wins; absent falls back to the daemon default.
@@ -100,6 +102,14 @@ public final class Actuator {
         }
     }
 
+    /// Resolve + approval-gate in one step; every action targets apps only
+    /// through this, so the allowlist cannot be bypassed.
+    private func resolveApproved(_ identifier: String) throws -> NSRunningApplication {
+        let app = try registry.resolve(identifier)
+        try approvals.check(name: app.localizedName, bundleID: app.bundleIdentifier)
+        return app
+    }
+
     private func mouseButton(_ name: String?) throws -> (button: CGMouseButton, down: CGEventType, up: CGEventType, drag: CGEventType) {
         switch name ?? "left" {
         case "left": return (.left, .leftMouseDown, .leftMouseUp, .leftMouseDragged)
@@ -114,7 +124,7 @@ public final class Actuator {
     /// prior capture fails fast with invalid_params without touching AX.
     private func target(_ appIdentifier: String, needsGeometry: Bool) throws
         -> (app: NSRunningApplication, window: AXUIElement, geometry: CaptureGeometry?) {
-        let app = try registry.resolve(appIdentifier)
+        let app = try resolveApproved(appIdentifier)
         var geometry: CaptureGeometry?
         if needsGeometry {
             guard let g = capture.latestGeometry(forPid: app.processIdentifier) else {
@@ -156,7 +166,7 @@ public final class Actuator {
         let background = effectiveBackground(input.background)
         _ = try mouseButton(input.mouse_button) // validate early
         if let index = input.element_index {
-            let app = try registry.resolve(input.app)
+            let app = try resolveApproved(input.app)
             let element = try capture.element(forIndex: index, appPid: app.processIdentifier)
             let window = try capture.focusedWindow(of: app)
             raiseUnlessBackground(app: app, window: window, background: background) // unobscured post-action screenshots
@@ -245,7 +255,7 @@ public final class Actuator {
         case "right": vertical = false; sign = -1
         default: throw SkyServiceError(code: .invalidParams, message: "direction must be up|down|left|right")
         }
-        let app = try registry.resolve(input.app)
+        let app = try resolveApproved(input.app)
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
         raiseUnlessBackground(app: app, window: window, background: background)
@@ -280,7 +290,7 @@ public final class Actuator {
     public func setValue(_ input: SetValueInput) throws -> ActionResult {
         try guardNotPaused()
         let background = effectiveBackground(input.background)
-        let app = try registry.resolve(input.app)
+        let app = try resolveApproved(input.app)
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
         raiseUnlessBackground(app: app, window: window, background: background)
@@ -317,7 +327,7 @@ public final class Actuator {
     public func performSecondaryAction(_ input: PerformSecondaryActionInput) throws -> ActionResult {
         try guardNotPaused()
         let background = effectiveBackground(input.background)
-        let app = try registry.resolve(input.app)
+        let app = try resolveApproved(input.app)
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
         raiseUnlessBackground(app: app, window: window, background: background)
@@ -332,7 +342,7 @@ public final class Actuator {
     public func selectText(_ input: SelectTextInput) throws -> ActionResult {
         try guardNotPaused()
         let background = effectiveBackground(input.background)
-        let app = try registry.resolve(input.app)
+        let app = try resolveApproved(input.app)
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
         raiseUnlessBackground(app: app, window: window, background: background)

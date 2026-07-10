@@ -67,11 +67,60 @@ func usage() {
     """)
 }
 
+func showApprovals() {
+    let approvals = Approvals()
+    let cfg = approvals.load()
+    print("approvals file: \(approvals.fileURL.path)")
+    print("mode: \(cfg.mode)")
+    for entry in cfg.allow { print("  allow: \(entry)") }
+    if cfg.mode != "allowlist" {
+        print("  (allow_all: every app may be actuated; 'skylight approve <app>' to lock down)")
+    }
+}
+
+func approve(_ name: String) {
+    let approvals = Approvals()
+    var cfg = approvals.load()
+    cfg.mode = "allowlist"
+    if !cfg.allow.contains(where: { $0.lowercased() == name.lowercased() }) {
+        cfg.allow.append(name)
+    }
+    writeApprovals(cfg, to: approvals.fileURL)
+    print("approved '\(name)'; mode=allowlist (\(cfg.allow.count) app(s) allowed)")
+}
+
+func allowAll() {
+    let approvals = Approvals()
+    writeApprovals(ApprovalsConfig(mode: "allow_all", allow: []), to: approvals.fileURL)
+    print("approvals reset: allow_all")
+}
+
+func writeApprovals(_ cfg: ApprovalsConfig, to url: URL) {
+    do {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(cfg).write(to: url)
+    } catch {
+        print("error: cannot write \(url.path): \(error)")
+        exit(1)
+    }
+}
+
 switch CommandLine.arguments.dropFirst().first {
 case "doctor": doctor()
 case "start": start()
 case "usage": usage()
+case "approvals": showApprovals()
+case "approve":
+    guard let name = CommandLine.arguments.dropFirst(2).first else {
+        print("usage: skylight approve <app-name-or-bundle-id>")
+        exit(2)
+    }
+    approve(name)
+case "allow-all": allowAll()
 default:
-    print("usage: skylight <start|doctor|usage>")
+    print("usage: skylight <start|doctor|usage|approvals|approve <app>|allow-all>")
     exit(2)
 }

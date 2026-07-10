@@ -150,6 +150,20 @@ final class ActuatorTests: XCTestCase {
         assertThrowsCode(.invalidParams, try live.click(ClickInput(app: "Finder")))
     }
 
+    func testActuationBlockedByApprovalsAllowlist() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("approvals-gate-\(UUID().uuidString).json")
+        try JSONEncoder().encode(ApprovalsConfig(mode: "allowlist", allow: ["SomeOtherApp"])).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let pauseFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SKYLIGHT_PAUSE-\(UUID())")
+        let actuator = Actuator(registry: AppRegistry(), capture: AXCapture(),
+                                pauseFile: pauseFile, approvals: Approvals(fileURL: url))
+        XCTAssertThrowsError(try actuator.typeText(TypeTextInput(app: "Finder", text: "x"))) { error in
+            XCTAssertEqual((error as? SkyServiceError)?.code, .approvalRequired)
+        }
+    }
+
     func testEffectiveBackgroundPerRequestOverride() {
         let registry = AppRegistry()
         let capture = AXCapture()

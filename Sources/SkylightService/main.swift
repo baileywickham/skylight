@@ -26,7 +26,8 @@ let postActionSleepMs = env["SKYLIGHT_POST_ACTION_SLEEP_MS"].flatMap(Int.init) ?
 let background = ["1", "true", "yes"].contains((env["SKYLIGHT_BACKGROUND"] ?? "").lowercased())
 let screenshotter = Screenshotter(shotsDir: shotsDir)
 let actuator = Actuator(registry: registry, capture: axCapture,
-                        postActionSleepMs: postActionSleepMs, background: background)
+                        postActionSleepMs: postActionSleepMs, background: background,
+                        approvals: Approvals())
 
 /// Wraps a throwing handler: SkyServiceError → structured error response,
 /// anything else → capture_failed with the description.
