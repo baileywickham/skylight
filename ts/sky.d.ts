@@ -4,19 +4,21 @@ export type Direction = "up" | "down" | "left" | "right";
 export type SelectTextSelectionType = "select" | "cursor_before" | "cursor_after";
 export interface AppInfo {
     name: string;
-    bundle_id: string | null;
+    /** Absent on the wire when the app has no bundle id (Swift encodeIfPresent). */
+    bundle_id?: string | null;
     pid: number;
     is_frontmost: boolean;
-    launch_date: string | null;
+    /** Absent on the wire when unknown (Swift encodeIfPresent). */
+    launch_date?: string | null;
 }
 export interface ListAppsResult {
     apps: AppInfo[];
 }
 export interface Screenshot {
-    /** file:// path to the PNG under shots_dir (default delivery). */
+    /** file:// path to the PNG under the daemon's shots dir ($SKYLIGHT_SHOTS_DIR). */
     url: string;
-    /** base64 data URL — present only when include_data_url: true was requested. */
-    data_url?: string;
+    /** base64 data URL — absent from the wire unless include_data_url: true was requested. */
+    data_url?: string | null;
     width: number;
     height: number;
 }
@@ -89,7 +91,6 @@ import type { ActionResult, AppState, ClickInput, DragInput, GetAppStateInput, L
 export interface SkyConfig {
     socket_path: string;
     post_action_sleep_ms: number;
-    shots_dir: string;
 }
 export declare function defaultConfig(): SkyConfig;
 /** Reads JSON config from $SKYLIGHT_CONFIG_PATH over the defaults. */
@@ -109,6 +110,15 @@ export declare class SkyClient {
     constructor(config?: Partial<SkyConfig>);
     /** Lazy connect on first call, like @oai/sky. */
     private connect;
+    /** Rejects and clears every pending call with the same error. */
+    private rejectAllPending;
+    /**
+     * Called when the socket closes/ends/errors out from under us (including
+     * the FIN the daemon sends right after an id:0 protocol error). Fails any
+     * still-pending calls instead of leaving them hanging forever, and resets
+     * connection state so the next call() reconnects lazily.
+     */
+    private handleSocketTeardown;
     private onData;
     call<T>(method: string, params: unknown): Promise<T>;
     close(): void;

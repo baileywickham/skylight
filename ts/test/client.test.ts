@@ -42,7 +42,8 @@ describe("SkyClient", () => {
     const cfg = defaultConfig();
     expect(cfg.socket_path.endsWith("Library/Application Support/skylight/ipc/computeruse.sock")).toBe(true);
     expect(cfg.post_action_sleep_ms).toBe(100);
-    expect(cfg.shots_dir.endsWith(path.join(".skylight", "shots"))).toBe(true);
+    // shots_dir is daemon-side config ($SKYLIGHT_SHOTS_DIR), not a client field.
+    expect(cfg).not.toHaveProperty("shots_dir");
   });
 
   it("serializes requests as one JSON object per line", () => {
@@ -126,6 +127,27 @@ describe("SkyClient", () => {
     clients.push(client);
 
     await expect(client.call("ping", {})).rejects.toBeInstanceOf(SkyError);
+  }, 5000);
+
+  it("rejects the pending call on a malformed (non-JSON) response line instead of throwing", async () => {
+    const sock = tmpSock();
+    // Stub daemon that answers with garbage: a bare JSON.parse in the socket
+    // "data" handler would throw an uncaught exception and kill the process.
+    const server = net.createServer((conn) => {
+      conn.on("data", () => {
+        conn.write("this is not json\n");
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(sock, () => resolve()));
+
+    const client = new SkyClient({ socket_path: sock });
+    clients.push(client);
+
+    await expect(client.call("ping", {})).rejects.toMatchObject({
+      name: "SkyError",
+      code: "protocol_error",
+    });
   }, 5000);
 
   it("close() settles outstanding calls instead of leaving them hanging", async () => {

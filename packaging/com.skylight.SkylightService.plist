@@ -8,6 +8,14 @@
         <string>__HOME__/Applications/SkylightService.app/Contents/MacOS/SkylightService</string>
     </array>
     <key>RunAtLoad</key><true/>
+    <!-- Belt-and-suspenders with the daemon's absolute default
+         (~/Library/Application Support/skylight/shots): make the launched
+         daemon's shots dir unambiguous regardless of launchd's cwd. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>SKYLIGHT_SHOTS_DIR</key>
+        <string>__HOME__/Library/Application Support/skylight/shots</string>
+    </dict>
     <key>KeepAlive</key><false/>
     <key>StandardErrorPath</key><string>__HOME__/Library/Logs/skylight/service.log</string>
 </dict>

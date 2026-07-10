@@ -11,9 +11,11 @@ let axCapture = AXCapture()
 let auditLog = AuditLog()
 
 let env = ProcessInfo.processInfo.environment
+// Default to an absolute path the daemon can always write: launched via
+// launchd/`open -a` its cwd is `/`, so a cwd-relative default would fail
+// every screenshot with EACCES.
 let shotsDir = env["SKYLIGHT_SHOTS_DIR"].map { URL(fileURLWithPath: $0) }
-    ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        .appendingPathComponent(".skylight/shots")
+    ?? SkylightPaths.shotsDir
 let postActionSleepMs = env["SKYLIGHT_POST_ACTION_SLEEP_MS"].flatMap(Int.init) ?? 100
 let screenshotter = Screenshotter(shotsDir: shotsDir)
 let actuator = Actuator(registry: registry, capture: axCapture, postActionSleepMs: postActionSleepMs)
@@ -81,6 +83,10 @@ router.register("get_app_state", handle("get_app_state", GetAppStateInput.self) 
         try await screenshotter.capture(window: captured.window,
                                         includeDataURL: input.include_data_url ?? false)
     }
+    // Commit the diff baseline only now that the whole capture — screenshot
+    // included — succeeded; a capture_failed/permission_denied screenshot must
+    // not advance the baseline past a tree the model never saw.
+    axCapture.commitBaseline(captured, forPid: app.processIdentifier)
     auditLog.record(method: "get_app_state", target: input.app, outcome: "ok")
     return AppState(text: captured.text, screenshot: shot, diffed: captured.diffed)
 })

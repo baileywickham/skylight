@@ -52,6 +52,15 @@ public struct CaptureResult {
     public let window: AXUIElement
     public let geometry: CaptureGeometry
     public let diffed: Bool
+
+    public init(text: String, lines: [TreeLine], window: AXUIElement,
+                geometry: CaptureGeometry, diffed: Bool) {
+        self.text = text
+        self.lines = lines
+        self.window = window
+        self.geometry = geometry
+        self.diffed = diffed
+    }
 }
 
 /// Per-app capture state: the sticky index map, the previous serialized lines
@@ -110,7 +119,15 @@ public final class AXCapture {
     /// Capture with diff-by-default (Milestone 2): when a previous capture of
     /// the same app exists and `disableDiff == false`, returns only the
     /// added/removed/changed lines keyed by sticky index; otherwise the full
-    /// tree. Either way the baseline is refreshed to this capture's lines.
+    /// tree.
+    ///
+    /// Does NOT advance the diff baseline: the caller must invoke
+    /// `commitBaseline(_:forPid:)` once the full get_app_state response
+    /// (including the screenshot) has been produced. Otherwise a capture whose
+    /// screenshot fails would advance the baseline to a tree the model never
+    /// saw, and the next diff would silently omit the intervening changes.
+    /// (The sticky ElementIndexMap does advance during the walk; indices are
+    /// monotonic, so that is safe regardless of response delivery.)
     public func capture(app: NSRunningApplication, disableDiff: Bool) throws -> CaptureResult {
         guard Permissions.status().accessibility else {
             let instructions = Permissions.instructions(
@@ -148,10 +165,25 @@ public final class AXCapture {
             diffed = false
         }
 
-        s.previousLines = serialized.lines
-        s.latestGeometry = geometry
         return CaptureResult(text: outputText, lines: serialized.lines,
                              window: window, geometry: geometry, diffed: diffed)
+    }
+
+    /// Commits a capture as the new diff baseline (and coordinate geometry)
+    /// for `pid`. Call only after the capture's full response — including the
+    /// screenshot — succeeded, so the baseline never advances past a tree the
+    /// model never received. Must run on the daemon's serial actuation queue,
+    /// like every other AXCapture call.
+    public func commitBaseline(_ result: CaptureResult, forPid pid: pid_t) {
+        let s = state(for: pid)
+        s.previousLines = result.lines
+        s.latestGeometry = result.geometry
+    }
+
+    /// True when a committed diff baseline exists for `pid` — lets tests
+    /// assert that a failed capture path leaves the baseline untouched.
+    public func hasBaseline(forPid pid: pid_t) -> Bool {
+        stateByPid[pid]?.previousLines != nil
     }
 
     /// Resolves an element_index back to its live AXUIElement for action calls.

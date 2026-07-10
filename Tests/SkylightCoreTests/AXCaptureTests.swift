@@ -33,6 +33,60 @@ final class AXCaptureTests: XCTestCase {
         }
     }
 
+    // MARK: - Diff baseline commit (I1)
+    //
+    // `capture()` must NOT advance the diff baseline itself: the get_app_state
+    // handler commits via `commitBaseline` only after the screenshot succeeds,
+    // so a capture whose screenshot fails leaves the baseline (and coordinate
+    // geometry) at the last tree the model actually received. Exercising
+    // `capture()` end-to-end needs AX permission (TCC), so that path stays
+    // smoke-only; these tests pin the contract of the separately-callable
+    // commit step the handler relies on.
+
+    private func makeCaptureResult(marker: String) -> CaptureResult {
+        CaptureResult(
+            text: "[0] AXWindow \"\(marker)\"",
+            lines: [TreeLine(index: 0, depth: 0, text: "AXWindow \"\(marker)\"")],
+            window: AXUIElementCreateApplication(1), // element creation needs no permission
+            geometry: CaptureGeometry(windowOriginX: 10, windowOriginY: 20, scale: 2),
+            diffed: false)
+    }
+
+    func testBaselineAdvancesOnlyWhenCommitted() {
+        let capture = AXCapture()
+        let pid: pid_t = 4242
+
+        // The screenshot-failure path is "don't commit": baseline and geometry
+        // must stay exactly as they were (here: absent).
+        XCTAssertFalse(capture.hasBaseline(forPid: pid))
+        XCTAssertNil(capture.latestGeometry(forPid: pid))
+
+        let first = makeCaptureResult(marker: "seen-by-model")
+        capture.commitBaseline(first, forPid: pid)
+        XCTAssertTrue(capture.hasBaseline(forPid: pid))
+        XCTAssertEqual(capture.latestGeometry(forPid: pid), first.geometry)
+
+        // A later capture whose screenshot fails is never committed, so the
+        // baseline/geometry must remain the last committed capture's.
+        _ = makeCaptureResult(marker: "never-delivered")
+        XCTAssertEqual(capture.latestGeometry(forPid: pid), first.geometry)
+
+        let second = CaptureResult(
+            text: first.text, lines: first.lines, window: first.window,
+            geometry: CaptureGeometry(windowOriginX: 99, windowOriginY: 99, scale: 1),
+            diffed: true)
+        capture.commitBaseline(second, forPid: pid)
+        XCTAssertEqual(capture.latestGeometry(forPid: pid), second.geometry)
+    }
+
+    func testCommitBaselineIsPerPid() {
+        let capture = AXCapture()
+        capture.commitBaseline(makeCaptureResult(marker: "a"), forPid: 1000)
+        XCTAssertTrue(capture.hasBaseline(forPid: 1000))
+        XCTAssertFalse(capture.hasBaseline(forPid: 2000))
+        XCTAssertNil(capture.latestGeometry(forPid: 2000))
+    }
+
     // MARK: - Value sanitization (pure function; keeps one-node-per-line intact)
 
     func testSanitizeAXTextReplacesNewlinesAndControlCharacters() {

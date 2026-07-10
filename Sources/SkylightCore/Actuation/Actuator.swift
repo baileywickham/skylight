@@ -3,6 +3,28 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 
+/// Splits `text` into UTF-16 chunks of at most `maxUnits` units for
+/// keyboardSetUnicodeString, never ending a chunk between a high surrogate
+/// (0xD800–0xDBFF) and its low surrogate: a pair split across two key events
+/// reaches the app as two lone surrogates and renders as U+FFFD or is dropped.
+/// A chunk may therefore carry `maxUnits + 1` units when a pair straddles the
+/// boundary. Concatenating the chunks always round-trips `text` exactly.
+public func utf16Chunks(_ text: String, maxUnits: Int = 20) -> [[UInt16]] {
+    precondition(maxUnits > 0, "maxUnits must be positive")
+    let units = Array(text.utf16)
+    var chunks: [[UInt16]] = []
+    var start = 0
+    while start < units.count {
+        var end = min(start + maxUnits, units.count)
+        if end < units.count, (0xD800...0xDBFF).contains(units[end - 1]) {
+            end += 1 // keep the surrogate pair in this chunk
+        }
+        chunks.append(Array(units[start..<end]))
+        start = end
+    }
+    return chunks
+}
+
 /// Performs the API's actions against live apps. NOT thread-safe (it shares
 /// AXCapture's per-app index map): all calls must stay on the daemon's global
 /// serial actuation queue, where the router already runs handlers.
@@ -133,18 +155,15 @@ public final class Actuator {
         try guardNotPaused()
         let (app, window, _) = try target(input.app, needsGeometry: false)
         activateAndRaise(app: app, window: window)
-        // Unicode key events into current focus, 20 UTF-16 units per event.
-        let units = Array(input.text.utf16)
-        var i = 0
-        while i < units.count {
-            let chunk = Array(units[i..<min(i + 20, units.count)])
+        // Unicode key events into current focus, ~20 UTF-16 units per event
+        // (surrogate pairs are never split across events; see utf16Chunks).
+        for chunk in utf16Chunks(input.text) {
             let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true)
             let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
             down?.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
             up?.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
             post(down)
             post(up)
-            i += 20
             usleep(5_000) // keep event order stable for fast typists
         }
         postActionSleep()

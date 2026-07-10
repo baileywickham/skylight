@@ -5,6 +5,27 @@ import { sky, SkyError } from "../src/index.js";
 const gated = process.env.SKYLIGHT_SMOKE === "1";
 const MARKER = "skylight-smoke-marker";
 
+/**
+ * Runs a smoke body, skipping gracefully (like the first test does) when the
+ * failure is an ungranted TCC permission rather than a real regression — e.g.
+ * Screen Recording missing makes every get_app_state fail permission_denied.
+ * Any other error still fails the test.
+ */
+async function skipOnPermissionDenied(what: string, body: () => Promise<void>): Promise<void> {
+  try {
+    await body();
+  } catch (err) {
+    if (err instanceof SkyError && err.code === "permission_denied") {
+      console.warn(
+        `skylight smoke: ${what} returned permission_denied (TCC grant not given to ` +
+          "SkylightService) — skipping this check; grant Accessibility + Screen Recording to run it.",
+      );
+      return;
+    }
+    throw err;
+  }
+}
+
 // Live end-to-end smoke test against a real, permission-granted SkylightService
 // driving TextEdit. Gated behind SKYLIGHT_SMOKE=1 so `vitest run` (and CI) never
 // depends on TCC grants — this only runs when explicitly enabled by a human/runner
@@ -70,17 +91,24 @@ describe.runIf(gated)("live smoke (TextEdit)", () => {
   }, 30000);
 
   it("list_apps includes TextEdit", async () => {
-    const apps = await sky.list_apps();
-    expect(apps.apps.some((a) => a.name === "TextEdit")).toBe(true);
+    await skipOnPermissionDenied("list_apps", async () => {
+      const apps = await sky.list_apps();
+      expect(apps.apps.some((a) => a.name === "TextEdit")).toBe(true);
+    });
   });
 
   it("select_text selects a substring in TextEdit", async () => {
-    const state = await sky.get_app_state({ app: "TextEdit" });
-    const textArea = state.text.split("\n").find((l) => l.includes("AXTextArea"));
-    expect(textArea).toBeDefined();
-    const index = Number(textArea!.match(/^\s*\[(\d+)\]/)![1]);
-    const r = await sky.select_text({ app: "TextEdit", element_index: index, text: "smoke", selection_type: "select" });
-    expect(r.done).toBe(true);
+    // get_app_state requires Screen Recording (the daemon couples capture +
+    // screenshot), so an ungranted run must skip here exactly like the first
+    // test does, not fail.
+    await skipOnPermissionDenied("select_text smoke", async () => {
+      const state = await sky.get_app_state({ app: "TextEdit" });
+      const textArea = state.text.split("\n").find((l) => l.includes("AXTextArea"));
+      expect(textArea).toBeDefined();
+      const index = Number(textArea!.match(/^\s*\[(\d+)\]/)![1]);
+      const r = await sky.select_text({ app: "TextEdit", element_index: index, text: "smoke", selection_type: "select" });
+      expect(r.done).toBe(true);
+    });
     sky.close();
   }, 30000);
 });

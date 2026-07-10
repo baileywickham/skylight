@@ -24,6 +24,11 @@ final class PackagingTests: XCTestCase {
         let args = agent["ProgramArguments"] as? [String]
         XCTAssertEqual(args?.first, "__HOME__/Applications/SkylightService.app/Contents/MacOS/SkylightService")
         XCTAssertEqual(agent["RunAtLoad"] as? Bool, true)
+        // C1: launchd starts the daemon with cwd `/`, so the shots dir must be
+        // pinned to an absolute, writable location via the environment.
+        let envVars = agent["EnvironmentVariables"] as? [String: String]
+        XCTAssertEqual(envVars?["SKYLIGHT_SHOTS_DIR"],
+                       "__HOME__/Library/Application Support/skylight/shots")
     }
 
     func testShellScriptsParse() throws {

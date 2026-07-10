@@ -15,4 +15,10 @@ public enum SkylightPaths {
     public static var pauseFile: URL {
         supportDir.appendingPathComponent("SKYLIGHT_PAUSE")
     }
+    /// Default screenshot output directory. Must be ABSOLUTE: under launchd /
+    /// `open -a` the daemon's cwd is `/`, so a cwd-relative default would try
+    /// to create `/.skylight/shots` and fail every capture with EACCES.
+    public static var shotsDir: URL {
+        supportDir.appendingPathComponent("shots")
+    }
 }

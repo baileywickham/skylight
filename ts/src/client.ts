@@ -8,10 +8,14 @@ import type {
   SetValueInput, TypeTextInput,
 } from "./types.js";
 
+// NOTE: shots_dir is intentionally NOT part of SkyConfig: the client never
+// transmits configuration to the daemon, so a client-side shots_dir would be
+// dead weight that looks functional. The daemon's shots dir is controlled by
+// $SKYLIGHT_SHOTS_DIR in the daemon's environment (see the LaunchAgent plist),
+// defaulting to ~/Library/Application Support/skylight/shots.
 export interface SkyConfig {
   socket_path: string;
   post_action_sleep_ms: number;
-  shots_dir: string;
 }
 
 export function defaultConfig(): SkyConfig {
@@ -19,7 +23,6 @@ export function defaultConfig(): SkyConfig {
   return {
     socket_path: path.join(support, "ipc", "computeruse.sock"),
     post_action_sleep_ms: 100,
-    shots_dir: path.join(process.cwd(), ".skylight", "shots"),
   };
 }
 
@@ -118,7 +121,19 @@ export class SkyClient {
       const line = this.buffer.slice(0, nl);
       this.buffer = this.buffer.slice(nl + 1);
       if (!line.trim()) continue;
-      const msg = JSON.parse(line) as WireResponse;
+      let msg: WireResponse;
+      try {
+        msg = JSON.parse(line) as WireResponse;
+      } catch {
+        // A malformed frame must not throw out of the socket "data" event
+        // handler (that would be an uncaught exception killing the process).
+        // It also means the stream is corrupt, so fail every in-flight call.
+        this.rejectAllPending(new SkyError(
+          "protocol_error",
+          `malformed response line from daemon: ${line.slice(0, 200)}`,
+        ));
+        continue;
+      }
       const waiter = this.pending.get(msg.id);
       if (!waiter) {
         // Unmatched frame (e.g. protocol-level error reported with id: 0, or a

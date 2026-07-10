@@ -15,7 +15,7 @@
   ],
   "responses": [
     { "name": "list_apps", "decodes_to": "ListAppsResult", "json": { "apps": [{ "name": "Notes", "bundle_id": "com.apple.Notes", "pid": 501, "is_frontmost": true, "launch_date": "2026-07-09T10:00:00Z" }] } },
-    { "name": "app_state", "decodes_to": "AppState", "json": { "text": "[0] AXWindow \"Untitled\"", "screenshot": { "url": "file:///x/shot.png", "data_url": null, "width": 1600, "height": 1000 }, "diffed": false } },
+    { "name": "app_state", "decodes_to": "AppState", "json": { "text": "[0] AXWindow \"Untitled\"", "screenshot": { "url": "file:///x/shot.png", "width": 1600, "height": 1000 }, "diffed": false } },
     { "name": "action", "decodes_to": "ActionResult", "json": { "done": true } }
   ],
   "json_values": [
