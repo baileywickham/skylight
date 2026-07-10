@@ -35,8 +35,12 @@ struct LiveAXNode: TreeNode {
     var children: [any TreeNode] {
         let kids: [AXUIElement] = (axAttribute(element, kAXChildrenAttribute) as CFArray?)
             .map { cfArray -> [AXUIElement] in
+                // `is`/`as?` do NOT discriminate CF types at runtime (verified: they
+                // pass CFString/CFNumber through), so filter by CFTypeID — after
+                // which the downcast is provably safe.
                 let array = cfArray as [AnyObject]
-                return array.filter { $0 is AXUIElement }.map { unsafeDowncast($0, to: AXUIElement.self) }
+                return array.filter { CFGetTypeID($0) == AXUIElementGetTypeID() }
+                    .map { unsafeDowncast($0, to: AXUIElement.self) }
             } ?? []
         return kids.map { LiveAXNode(element: $0) }
     }
@@ -90,8 +94,11 @@ public final class AXCapture {
         }
         let windows: [AXUIElement] = (axAttribute(appElement, kAXWindowsAttribute) as CFArray?)
             .map { cfArray -> [AXUIElement] in
+                // See children in LiveAXNode: CFTypeID is the only runtime-correct
+                // filter for CF types; `is AXUIElement` is vacuously true.
                 let array = cfArray as [AnyObject]
-                return array.filter { $0 is AXUIElement }.map { unsafeDowncast($0, to: AXUIElement.self) }
+                return array.filter { CFGetTypeID($0) == AXUIElementGetTypeID() }
+                    .map { unsafeDowncast($0, to: AXUIElement.self) }
             } ?? []
         guard let first = windows.first else {
             throw SkyServiceError(code: .noFocusedWindow,
