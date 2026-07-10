@@ -63,6 +63,7 @@ final class AXCaptureTests: XCTestCase {
             lines: [TreeLine(index: 0, depth: 0, text: "AXWindow \"\(marker)\"")],
             window: AXUIElementCreateApplication(1), // element creation needs no permission
             geometry: CaptureGeometry(windowOriginX: 10, windowOriginY: 20, scale: 2),
+            windowID: nil,
             diffed: false)
     }
 
@@ -88,6 +89,7 @@ final class AXCaptureTests: XCTestCase {
         let second = CaptureResult(
             text: first.text, lines: first.lines, window: first.window,
             geometry: CaptureGeometry(windowOriginX: 99, windowOriginY: 99, scale: 1),
+            windowID: nil,
             diffed: true)
         capture.commitBaseline(second, forPid: pid)
         XCTAssertEqual(capture.latestGeometry(forPid: pid), second.geometry)
@@ -171,5 +173,21 @@ final class AXCaptureTests: XCTestCase {
         XCTAssertFalse(needsWebAreaRetry(enablementJustApplied: true, lines: withWeb))
         XCTAssertFalse(needsWebAreaRetry(enablementJustApplied: false, lines: noWeb))
         XCTAssertFalse(needsWebAreaRetry(enablementJustApplied: false, lines: withWeb))
+    }
+
+    // MARK: - Window-aware diff gate (pure function)
+
+    func testCanDiffIsWindowAware() {
+        // No previous capture or diff disabled: never diff.
+        XCTAssertFalse(canDiff(disableDiff: false, hasPrevious: false, previousWindowID: 1, currentWindowID: 1))
+        XCTAssertFalse(canDiff(disableDiff: true, hasPrevious: true, previousWindowID: 1, currentWindowID: 1))
+        // Same window: diff.
+        XCTAssertTrue(canDiff(disableDiff: false, hasPrevious: true, previousWindowID: 7, currentWindowID: 7))
+        // Different window: a diff against another window's tree is bogus — full tree.
+        XCTAssertFalse(canDiff(disableDiff: false, hasPrevious: true, previousWindowID: 7, currentWindowID: 8))
+        // Ids unavailable (bridge missing) on either side: preserve the old
+        // per-app diff behavior rather than degrading to full-tree-always.
+        XCTAssertTrue(canDiff(disableDiff: false, hasPrevious: true, previousWindowID: nil, currentWindowID: 7))
+        XCTAssertTrue(canDiff(disableDiff: false, hasPrevious: true, previousWindowID: 7, currentWindowID: nil))
     }
 }

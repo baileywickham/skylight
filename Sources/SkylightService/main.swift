@@ -90,7 +90,8 @@ router.register("list_windows", handle("list_windows", ListWindowsInput.self) { 
 })
 router.register("get_app_state", handle("get_app_state", GetAppStateInput.self) { input in
     let app = try registry.resolve(input.app)
-    let captured = try axCapture.capture(app: app, disableDiff: input.disableDiff ?? false)
+    let captured = try axCapture.capture(app: app, windowID: input.window_id,
+                                         disableDiff: input.disableDiff ?? false)
     // AX-only fallback: a failed screenshot (Screen Recording ungranted or
     // lapsed — macOS 15 re-prompts periodically — or a transient SCK error)
     // degrades the response instead of failing it; the model still gets the

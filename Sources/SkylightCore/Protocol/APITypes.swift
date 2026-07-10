@@ -80,10 +80,13 @@ public struct ActionResult: Codable, Equatable {
 
 public struct GetAppStateInput: Codable, Equatable {
     public let app: String
+    /// Target a specific window (id from list_windows). Default: focused window.
+    public let window_id: Int?
     public let disableDiff: Bool?
     public let include_data_url: Bool?
-    public init(app: String, disableDiff: Bool? = nil, include_data_url: Bool? = nil) {
+    public init(app: String, window_id: Int? = nil, disableDiff: Bool? = nil, include_data_url: Bool? = nil) {
         self.app = app
+        self.window_id = window_id
         self.disableDiff = disableDiff
         self.include_data_url = include_data_url
     }

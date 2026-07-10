@@ -75,19 +75,32 @@ public func needsWebAreaRetry(enablementJustApplied: Bool, lines: [TreeLine]) ->
     enablementJustApplied && !lines.contains { $0.text.contains("AXWebArea") }
 }
 
+/// Window-aware diff gate: diff only against a baseline from the SAME window.
+/// When either window id is unknown (private bridge unavailable) fall back to
+/// the original per-app behavior — better an occasional cross-window diff on
+/// bridge-less machines than never diffing at all there.
+public func canDiff(disableDiff: Bool, hasPrevious: Bool,
+                    previousWindowID: Int?, currentWindowID: Int?) -> Bool {
+    guard !disableDiff, hasPrevious else { return false }
+    guard let prev = previousWindowID, let cur = currentWindowID else { return true }
+    return prev == cur
+}
+
 public struct CaptureResult {
     public let text: String
     public let lines: [TreeLine]
     public let window: AXUIElement
     public let geometry: CaptureGeometry
+    public let windowID: Int?
     public let diffed: Bool
 
     public init(text: String, lines: [TreeLine], window: AXUIElement,
-                geometry: CaptureGeometry, diffed: Bool) {
+                geometry: CaptureGeometry, windowID: Int?, diffed: Bool) {
         self.text = text
         self.lines = lines
         self.window = window
         self.geometry = geometry
+        self.windowID = windowID
         self.diffed = diffed
     }
 }
@@ -97,6 +110,7 @@ public struct CaptureResult {
 final class AppCaptureState {
     let map = ElementIndexMap()
     var previousLines: [TreeLine]?
+    var previousWindowID: Int?
     var latestGeometry: CaptureGeometry?
     var enablementDone = false
 }
@@ -164,7 +178,7 @@ public final class AXCapture {
     /// saw, and the next diff would silently omit the intervening changes.
     /// (The sticky ElementIndexMap does advance during the walk; indices are
     /// monotonic, so that is safe regardless of response delivery.)
-    public func capture(app: NSRunningApplication, disableDiff: Bool) throws -> CaptureResult {
+    public func capture(app: NSRunningApplication, windowID: Int? = nil, disableDiff: Bool) throws -> CaptureResult {
         guard Permissions.status().accessibility else {
             let instructions = Permissions.instructions(
                 for: PermissionStatus(accessibility: false, screen_recording: true))
@@ -191,7 +205,17 @@ public final class AXCapture {
             usleep(300_000) // settle before the first real walk
         }
 
-        let window = try focusedWindow(of: app)
+        let window: AXUIElement
+        if let id = windowID {
+            guard let match = try windowListings(of: app).first(where: { $0.info.window_id == id }) else {
+                throw SkyServiceError(code: .noFocusedWindow,
+                                      message: "window_id \(id) not found for '\(app.localizedName ?? "app")' — call list_windows for current ids")
+            }
+            window = match.element
+        } else {
+            window = try focusedWindow(of: app)
+        }
+        let currentWindowID = axWindowID(of: window).map { Int($0) }
         let geometry = try captureGeometry(for: window)
         var serialized = AXTreeSerializer(caps: caps).serialize(root: LiveAXNode(element: window), map: s.map)
         // Right after enablement Chromium can take a while (>1s cold, verified
@@ -211,9 +235,12 @@ public final class AXCapture {
         }
 
         // Milestone 2: diff-by-default on the sticky index map; disableDiff honored.
+        // M3: window-aware — a window change forces a full tree (see canDiff).
         let outputText: String
         let diffed: Bool
-        if !disableDiff, let previous = s.previousLines {
+        if canDiff(disableDiff: disableDiff, hasPrevious: s.previousLines != nil,
+                   previousWindowID: s.previousWindowID, currentWindowID: currentWindowID),
+           let previous = s.previousLines {
             outputText = diffTrees(previous: previous, current: serialized.lines)
             diffed = true
         } else {
@@ -221,8 +248,8 @@ public final class AXCapture {
             diffed = false
         }
 
-        return CaptureResult(text: outputText, lines: serialized.lines,
-                             window: window, geometry: geometry, diffed: diffed)
+        return CaptureResult(text: outputText, lines: serialized.lines, window: window,
+                             geometry: geometry, windowID: currentWindowID, diffed: diffed)
     }
 
     /// One entry per AX window of the app, with the wire-facing WindowInfo and
@@ -263,6 +290,7 @@ public final class AXCapture {
     public func commitBaseline(_ result: CaptureResult, forPid pid: pid_t) {
         let s = state(for: pid)
         s.previousLines = result.lines
+        s.previousWindowID = result.windowID
         s.latestGeometry = result.geometry
     }
 

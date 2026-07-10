@@ -58,6 +58,8 @@ export interface ActionResult {
 
 export interface GetAppStateInput {
   app: AppIdentifier;
+  /** Target a specific window (id from list_windows). Default: focused window. */
+  window_id?: number;
   disableDiff?: boolean;
   include_data_url?: boolean;
 }
