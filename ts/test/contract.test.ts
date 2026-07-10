@@ -32,7 +32,8 @@ describe("contract", () => {
       } else if (resp.decodes_to === "AppState") {
         const r = resp.json as AppState;
         expect(typeof r.text).toBe("string");
-        expect(typeof r.screenshot.url).toBe("string");
+        if (r.screenshot != null) expect(typeof r.screenshot.url).toBe("string");
+        else expect(typeof r.screenshot_error).toBe("string");
         expect(typeof r.diffed).toBe("boolean");
       } else if (resp.decodes_to === "ActionResult") {
         const r = resp.json as ActionResult;

@@ -35,11 +35,15 @@ public struct ScreenshotResult: Codable, Equatable {
 
 public struct AppState: Codable, Equatable {
     public let text: String
-    public let screenshot: ScreenshotResult
+    /// nil when the screenshot failed but the AX capture succeeded (AX-only
+    /// degraded response); `screenshot_error` then says why.
+    public let screenshot: ScreenshotResult?
+    public let screenshot_error: String?
     public let diffed: Bool
-    public init(text: String, screenshot: ScreenshotResult, diffed: Bool) {
+    public init(text: String, screenshot: ScreenshotResult?, screenshot_error: String? = nil, diffed: Bool) {
         self.text = text
         self.screenshot = screenshot
+        self.screenshot_error = screenshot_error
         self.diffed = diffed
     }
 }

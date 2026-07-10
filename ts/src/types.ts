@@ -29,7 +29,10 @@ export interface Screenshot {
 export interface AppState {
   /** Indexed accessibility text: full tree, or a diff when diffed is true (M2). */
   text: string;
-  screenshot: Screenshot;
+  /** Absent when the screenshot failed but AX capture succeeded (AX-only degraded response). */
+  screenshot?: Screenshot | null;
+  /** Present exactly when screenshot is absent: "<code>: <message>". */
+  screenshot_error?: string | null;
   diffed: boolean;
 }
 
