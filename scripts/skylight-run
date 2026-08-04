@@ -76,7 +76,7 @@ ensure_daemon() {
     # to the launchd-launched SkylightService.app, and a shell-spawned copy
     # would run permission-less. Kick the agent instead.
     [ -f "$HOME/Library/LaunchAgents/$AGENT_LABEL.plist" ] \
-      || die "launch agent not installed — run 'brew reinstall skylight' (its post_install registers it)"
+      || die "launch agent not installed — run 'skylight-install'"
     launchctl kickstart "gui/$(id -u)/$AGENT_LABEL" 2>/dev/null \
       || launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$AGENT_LABEL.plist" \
       || die "cannot start $AGENT_LABEL via launchctl — check $LOG"

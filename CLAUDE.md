@@ -75,17 +75,20 @@ builds from main over SSH):
 ```bash
 brew tap baileywickham/skylight git@github.com:baileywickham/skylight.git
 brew install --HEAD baileywickham/skylight/skylight
+skylight-install   # sign + register LaunchAgent; rerun after every reinstall
 ```
 
-Installs `skylight` + `skylight-run` (keg-layout aware: ts client vendored in
-libexec, daemon delegated to launchd, never spawned as a terminal child).
-`post_install` signs `SkylightService.app` with a stable identity ("Skylight
-Dev" > Developer ID > Apple Development) and runs
+Installs `skylight`, `skylight-run` (keg-layout aware: ts client vendored in
+libexec, daemon delegated to launchd, never spawned as a terminal child), and
+`skylight-install`, which signs `SkylightService.app` with a stable identity
+("Skylight Dev" > Developer ID > Apple Development) and runs
 `scripts/install-launchagent.sh` (app → `~/Applications`, LaunchAgent
-bootstrapped) — NOT `brew services`, because TCC keys bare-binary grants to the
-Cellar path, which moves every HEAD reinstall; the signed bundle keeps grants
-across upgrades. First install needs the one-time TCC grants from the caveats.
-Upgrade with `brew reinstall skylight` (HEAD formulae don't auto-upgrade).
+bootstrapped). Signing cannot live in the formula: Homebrew sandboxes
+post_install, which blocks keychain access. NOT `brew services`, because TCC
+keys bare-binary grants to the Cellar path, which moves every HEAD reinstall;
+the signed bundle keeps grants across upgrades. First install needs the
+one-time TCC grants from the caveats. Upgrade with `brew reinstall skylight`
+(HEAD formulae don't auto-upgrade) + `skylight-install`.
 
 ## Conventions & gotchas (learned the hard way — don't regress these)
 

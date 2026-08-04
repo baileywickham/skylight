@@ -34,6 +34,7 @@ class Skylight < Formula
 
     bin.install ".build/release/skylight"
     bin.install "scripts/skylight-run"
+    bin.install "scripts/skylight-install"
     # skylight-run detects the keg layout by libexec/ts (vs ts/ in the repo).
     # node_modules is installed lazily on first run with the user's node —
     # not a brew dependency, so an nvm-managed node keeps working.
@@ -49,44 +50,17 @@ class Skylight < Formula
     (prefix/"scripts").install "scripts/install-launchagent.sh"
   end
 
-  def post_install
-    app = prefix/"build/SkylightService.app"
-    identity = signing_identity
-    if identity.nil?
-      opoo <<~EOS
-        No codesigning identity found — skipped signing and LaunchAgent setup.
-        Create one (Keychain Access > Certificate Assistant, name "Skylight Dev",
-        type Code Signing) or import an Apple identity, then:
-          brew postinstall skylight
-      EOS
-      return
-    end
-    ohai "Signing SkylightService.app with '#{identity}'"
-    system "codesign", "--force", "--sign", identity,
-           "--identifier", "com.skylight.SkylightService", app.to_s
-    system "codesign", "--verify", "--strict", app.to_s
-    # Copies the app to ~/Applications and bootstraps the LaunchAgent, so TCC
-    # attributes grants to the launchd-launched service itself.
-    system "bash", (prefix/"scripts/install-launchagent.sh").to_s
-  end
-
-  # Stable identity preference: the repo-convention self-signed cert first,
-  # then Apple identities (Developer ID outlives yearly Apple Development
-  # certs). SKYLIGHT_SIGNING_IDENTITY overrides when Homebrew passes it through.
-  def signing_identity
-    override = ENV.fetch("SKYLIGHT_SIGNING_IDENTITY", nil)
-    return override unless override.to_s.empty?
-
-    out = Utils.safe_popen_read("security", "find-identity", "-v", "-p", "codesigning")
-    ["Skylight Dev", "Developer ID Application", "Apple Development"].each do |name|
-      found = out[/"(#{Regexp.escape(name)}[^"]*)"/, 1]
-      return found if found
-    end
-    nil
-  end
+  # No post_install: Homebrew sandboxes it, which blocks the keychain access
+  # that codesign/security need. Signing + LaunchAgent registration live in
+  # bin/skylight-install instead (see caveats).
 
   def caveats
     <<~EOS
+      Finish the install (signs the service and registers its LaunchAgent —
+      Homebrew's post_install sandbox cannot touch the keychain, so this is a
+      separate step; rerun it after every reinstall/upgrade):
+        skylight-install
+
       One-time (and after signing-identity changes): grant the service its TCC
       permissions in System Settings > Privacy & Security:
         - Accessibility     -> add ~/Applications/SkylightService.app
