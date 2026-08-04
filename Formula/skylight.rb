@@ -19,6 +19,16 @@ class Skylight < Formula
   depends_on :macos
 
   def install
+    # On a beta macOS, Xcode for the new major is often unreleased while the
+    # CLT already ships the matching compiler+SDK; Homebrew's build env then
+    # pairs Xcode's older swiftc with the CLT's newer SDK and the stdlib
+    # swiftinterface refuses to build ("SDK is not supported by the
+    # compiler"). Prefer the CLT toolchain whenever it is newer than Xcode.
+    clt_version = Version.new(MacOS::CLT.version.to_s[/\d+\.\d+/] || "0")
+    if MacOS::CLT.installed? && MacOS::Xcode.installed? && clt_version > MacOS::Xcode.version
+      ENV["DEVELOPER_DIR"] = "/Library/Developer/CommandLineTools"
+    end
+
     # SwiftPM's own sandbox conflicts with Homebrew's build sandbox.
     system "swift", "build", "-c", "release", "--disable-sandbox"
 
