@@ -10,6 +10,12 @@ export interface AppInfo {
     is_frontmost: boolean;
     /** Absent on the wire when unknown (Swift encodeIfPresent). */
     launch_date?: string | null;
+    /** true for menu bar (LSUIElement/accessory) apps — a status item instead of windows. Absent for Dock apps. */
+    menu_bar_only?: boolean | null;
+}
+export interface ListAppsInput {
+    /** Also list menu bar (accessory) apps. Default false. */
+    include_menu_bar_apps?: boolean;
 }
 export interface ListAppsResult {
     apps: AppInfo[];
@@ -122,7 +128,7 @@ export interface SelectTextInput {
     /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
     background?: boolean;
 }
-import type { ActionResult, AppState, ClickInput, DragInput, GetAppStateInput, ListAppsResult, ListWindowsInput, ListWindowsResult, PerformSecondaryActionInput, PressKeyInput, ScrollInput, SelectTextInput, SetValueInput, TypeTextInput } from "./types.js";
+import type { ActionResult, AppState, ClickInput, DragInput, GetAppStateInput, ListAppsInput, ListAppsResult, ListWindowsInput, ListWindowsResult, PerformSecondaryActionInput, PressKeyInput, ScrollInput, SelectTextInput, SetValueInput, TypeTextInput } from "./types.js";
 export interface SkyConfig {
     socket_path: string;
     post_action_sleep_ms: number;
@@ -157,7 +163,7 @@ export declare class SkyClient {
     private onData;
     call<T>(method: string, params: unknown): Promise<T>;
     close(): void;
-    list_apps(): Promise<ListAppsResult>;
+    list_apps(input?: ListAppsInput): Promise<ListAppsResult>;
     list_windows(input: ListWindowsInput): Promise<ListWindowsResult>;
     get_app_state(input: GetAppStateInput): Promise<AppState>;
     click(input: ClickInput): Promise<ActionResult>;

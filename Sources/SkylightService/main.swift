@@ -84,7 +84,9 @@ router.register("echo") { req in
     (try? Response.success(id: req.id, result: req.params ?? JSONValue.object([:])))
         ?? .failure(id: req.id, code: .protocolError, message: "encoding echo result failed")
 }
-router.register("list_apps", handle("list_apps", EmptyParams.self) { _ in registry.listApps() })
+router.register("list_apps", handle("list_apps", ListAppsInput.self) { input in
+    registry.listApps(includeMenuBarApps: input.include_menu_bar_apps ?? false)
+})
 router.register("list_windows", handle("list_windows", ListWindowsInput.self) { input in
     let app = try registry.resolve(input.app)
     return ListWindowsResult(windows: try axCapture.windowListings(of: app).map(\.info))

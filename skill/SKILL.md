@@ -37,7 +37,7 @@ All methods take `app` (app name, e.g. `"Finder"`). Full types: `~/workspace/sky
 
 | Method | Key params |
 |---|---|
-| `list_apps()` | — |
+| `list_apps` | `include_menu_bar_apps?` (also list accessory/LSUIElement apps, tagged `menu_bar_only`) |
 | `list_windows` | — (windows with `window_id`, `title`, `is_focused`) |
 | `get_app_state` | `disableDiff?`, `window_id?` (from `list_windows`), `include_data_url?` |
 | `click` | `element_index` OR `x`,`y` (screenshot px); `mouse_button?`, `click_count?` |
@@ -53,6 +53,15 @@ Every action (`click`, `press_key`, `type_text`, `scroll`, `set_value`, `drag`, 
 
 ## Per-app notes
 
+- **Menu bar (status item) apps** (ArtWall, and any LSUIElement app): hidden from
+  `list_apps` by default — pass `{ include_menu_bar_apps: true }` to see them, but
+  `get_app_state`/actions accept their name directly either way. With no windows, the
+  capture roots at a synthetic `AXMenuBarApp` node: the status item (click it to open
+  the app's popover) plus the popover contents once open. Screenshots cover the open
+  popover (the closed state usually degrades to AX-only). The popover TOGGLES on each
+  status-item click and its state persists between calls — check the tree for
+  `AXPopover` before clicking, or you'll close what you meant to open. If the app also
+  opens a real window (e.g. Settings), captures switch to the normal window path.
 - **Chrome / browsers**: the tab strip is NOT in the AX tree — the window title tells you the active tab; `list_windows` enumerates windows (per profile). For tab-level work prefer the claude-in-chrome browser tools; Skylight is for the native chrome (dialogs, menus, settings).
 - **Chromium/Electron apps** (Slack, Obsidian, Notion, VS Code): first capture is slow (up to ~3s) while accessibility enablement settles; subsequent captures are fast. If the tree looks empty, re-capture once.
 - **Finder**: the desktop belongs to Finder — its tree often starts with the desktop scroll area, not a window. Use `list_windows` + `window_id` to target an actual Finder window.

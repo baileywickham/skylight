@@ -6,12 +6,25 @@ public struct AppInfo: Codable, Equatable {
     public let pid: Int32
     public let is_frontmost: Bool
     public let launch_date: String?
-    public init(name: String, bundle_id: String?, pid: Int32, is_frontmost: Bool, launch_date: String?) {
+    /// true for accessory-policy (LSUIElement) apps — menu bar extras with a
+    /// status item instead of windows. Absent for regular Dock apps.
+    public let menu_bar_only: Bool?
+    public init(name: String, bundle_id: String?, pid: Int32, is_frontmost: Bool, launch_date: String?,
+                menu_bar_only: Bool? = nil) {
         self.name = name
         self.bundle_id = bundle_id
         self.pid = pid
         self.is_frontmost = is_frontmost
         self.launch_date = launch_date
+        self.menu_bar_only = menu_bar_only
+    }
+}
+
+public struct ListAppsInput: Codable, Equatable {
+    /// Also list accessory-policy (menu bar) apps. Default false.
+    public let include_menu_bar_apps: Bool?
+    public init(include_menu_bar_apps: Bool? = nil) {
+        self.include_menu_bar_apps = include_menu_bar_apps
     }
 }
 

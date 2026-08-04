@@ -22,7 +22,7 @@ final class ContractTests: XCTestCase {
             let request = try JSONDecoder().decode(Request.self, from: Data(req.line.utf8))
             XCTAssertEqual(request.method, req.method)
             switch req.method {
-            case "list_apps": _ = try request.decodeParams(EmptyContractParams.self)
+            case "list_apps": _ = try request.decodeParams(ListAppsInput.self)
             case "list_windows": _ = try request.decodeParams(ListWindowsInput.self)
             case "get_app_state": _ = try request.decodeParams(GetAppStateInput.self)
             case "click": _ = try request.decodeParams(ClickInput.self)
@@ -71,5 +71,3 @@ final class ContractTests: XCTestCase {
         }
     }
 }
-
-struct EmptyContractParams: Decodable {}

@@ -11,6 +11,13 @@ export interface AppInfo {
   is_frontmost: boolean;
   /** Absent on the wire when unknown (Swift encodeIfPresent). */
   launch_date?: string | null;
+  /** true for menu bar (LSUIElement/accessory) apps — a status item instead of windows. Absent for Dock apps. */
+  menu_bar_only?: boolean | null;
+}
+
+export interface ListAppsInput {
+  /** Also list menu bar (accessory) apps. Default false. */
+  include_menu_bar_apps?: boolean;
 }
 
 export interface ListAppsResult {

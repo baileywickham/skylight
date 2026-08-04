@@ -72,8 +72,14 @@ public final class Screenshotter {
             // Private-symbol bridge unavailable: best-effort frame+title match.
             scWindow = match
         } else {
+            var pid: pid_t = 0
+            AXUIElementGetPid(window, &pid)
+            let role: String = axAttribute(window, kAXRoleAttribute) ?? "?"
+            let frame = axFrame(of: window).map { "\(Int($0.origin.x)),\(Int($0.origin.y)) \(Int($0.width))x\(Int($0.height))" } ?? "noframe"
+            let samePid = content.windows.filter { $0.owningApplication?.processID == pid }
+                .map { "id=\($0.windowID) \(Int($0.frame.origin.x)),\(Int($0.frame.origin.y)) \(Int($0.frame.width))x\(Int($0.frame.height))" }
             throw SkyServiceError(code: .captureFailed,
-                                  message: "cannot resolve CGWindowID for the target window (bridge unavailable, no frame/title match)")
+                                  message: "cannot resolve CGWindowID (bridge=\(axWindowID(of: window).map(String.init) ?? "nil") role=\(role) frame=\(frame) pid=\(pid) samePidWindows=\(samePid))")
         }
         let scale = scWindow.frame.width > 0
             ? Double((try? captureGeometry(for: window))?.scale ?? 2.0) : 2.0

@@ -149,21 +149,44 @@ public final class AXCapture {
             } ?? []
     }
 
-    public func focusedWindow(of app: NSRunningApplication) throws -> AXUIElement {
+    /// What a capture/action targets: a normal window, or — for window-less
+    /// menu-bar apps — the extras menu bar + popover surfaces.
+    enum CaptureTarget {
+        case window(AXUIElement)
+        case menuBar(MenuBarAppTarget)
+
+        /// The element geometry, screenshots, raises, and scroll clamping use.
+        var surface: AXUIElement {
+            switch self {
+            case .window(let w): return w
+            case .menuBar(let t): return t.surface
+            }
+        }
+    }
+
+    func resolveTarget(of app: NSRunningApplication) throws -> CaptureTarget {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
         if let focused: AXUIElement = axAttribute(appElement, kAXFocusedWindowAttribute) {
-            return focused
+            return .window(focused)
         }
         if let main: AXUIElement = axAttribute(appElement, kAXMainWindowAttribute) {
-            return main
+            return .window(main)
         }
-        let windows = windowElements(of: appElement)
-        guard let first = windows.first else {
-            throw SkyServiceError(code: .noFocusedWindow,
-                                  message: "\(app.localizedName ?? "app") has no focused window")
+        if let first = windowElements(of: appElement).first {
+            return .window(first)
         }
-        return first
+        // Menu-bar (accessory) apps: no AXWindows at all — target the status
+        // item / open popover instead.
+        if let target = menuBarTarget(of: appElement) {
+            return .menuBar(target)
+        }
+        throw SkyServiceError(code: .noFocusedWindow,
+                              message: "\(app.localizedName ?? "app") has no window or menu bar extra")
+    }
+
+    public func focusedWindow(of app: NSRunningApplication) throws -> AXUIElement {
+        try resolveTarget(of: app).surface
     }
 
     /// Capture with diff-by-default (Milestone 2): when a previous capture of
@@ -205,19 +228,28 @@ public final class AXCapture {
             usleep(300_000) // settle before the first real walk
         }
 
-        let window: AXUIElement
+        let target: CaptureTarget
         if let id = windowID {
             guard let match = try windowListings(of: app).first(where: { $0.info.window_id == id }) else {
                 throw SkyServiceError(code: .noFocusedWindow,
                                       message: "window_id \(id) not found for '\(app.localizedName ?? "app")' — call list_windows for current ids")
             }
-            window = match.element
+            target = .window(match.element)
         } else {
-            window = try focusedWindow(of: app)
+            target = try resolveTarget(of: app)
+        }
+        // Menu-bar apps serialize from a synthetic root spanning the status
+        // item AND the popover — the popover is a detached AX subtree, so a
+        // single-element root would show one or the other, never both.
+        let window = target.surface
+        let root: any TreeNode
+        switch target {
+        case .window(let w): root = LiveAXNode(element: w)
+        case .menuBar(let t): root = MenuBarAppRoot(appElement: appElement, target: t)
         }
         let currentWindowID = axWindowID(of: window).map { Int($0) }
         let geometry = try captureGeometry(for: window)
-        var serialized = AXTreeSerializer(caps: caps).serialize(root: LiveAXNode(element: window), map: s.map)
+        var serialized = AXTreeSerializer(caps: caps).serialize(root: root, map: s.map)
         // Right after enablement Chromium can take a while (>1s cold, verified
         // live) to publish its web content, leaving the first walk without an
         // AXWebArea. Poll with a bounded budget — only on the enablement
@@ -230,7 +262,7 @@ public final class AXCapture {
             while needsWebAreaRetry(enablementJustApplied: true, lines: serialized.lines),
                   Date() < deadline {
                 usleep(500_000)
-                serialized = AXTreeSerializer(caps: caps).serialize(root: LiveAXNode(element: window), map: s.map)
+                serialized = AXTreeSerializer(caps: caps).serialize(root: root, map: s.map)
             }
         }
 

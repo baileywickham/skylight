@@ -114,10 +114,15 @@ driving it with the client. Stop the daemon with SIGTERM (it unlinks the socket)
 
 ## API methods
 
-`list_apps`, `list_windows` (per-app windows with CGWindowIDs), `get_app_state`
+`list_apps` (regular apps; `include_menu_bar_apps` adds accessory/LSUIElement
+apps tagged `menu_bar_only` — always resolvable by name regardless),
+`list_windows` (per-app windows with CGWindowIDs), `get_app_state`
 (AX text + screenshot; diffs by default, `disableDiff` forces full; `window_id`
 targets a non-focused window; degrades to AX-only + `screenshot_error` when the
-screenshot fails), `click` (element_index OR x/y), `press_key`, `type_text`,
+screenshot fails; window-less menu-bar apps capture a synthetic `AXMenuBarApp`
+root over the status item + open popover — see `AX/MenuBarApp.swift` for the
+popover's key-status-dependent attachment quirk), `click` (element_index OR x/y),
+`press_key`, `type_text`,
 `scroll`, `set_value`, `drag`, `perform_secondary_action`, `select_text`, plus
 `ping`/`echo`. Every action takes optional `background: true` (per-request
 no-focus-steal override). Actuation is gated by the opt-in per-app allowlist in

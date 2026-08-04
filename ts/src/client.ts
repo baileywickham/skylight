@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type {
-  ActionResult, AppState, ClickInput, DragInput, GetAppStateInput, ListAppsResult,
+  ActionResult, AppState, ClickInput, DragInput, GetAppStateInput, ListAppsInput, ListAppsResult,
   ListWindowsInput, ListWindowsResult,
   PerformSecondaryActionInput, PressKeyInput, ScrollInput, SelectTextInput,
   SetValueInput, TypeTextInput,
@@ -170,7 +170,7 @@ export class SkyClient {
     this.connecting = null;
   }
 
-  list_apps(): Promise<ListAppsResult> { return this.call("list_apps", {}); }
+  list_apps(input?: ListAppsInput): Promise<ListAppsResult> { return this.call("list_apps", input ?? {}); }
   list_windows(input: ListWindowsInput): Promise<ListWindowsResult> { return this.call("list_windows", input); }
   get_app_state(input: GetAppStateInput): Promise<AppState> { return this.call("get_app_state", input); }
   click(input: ClickInput): Promise<ActionResult> { return this.call("click", input); }
