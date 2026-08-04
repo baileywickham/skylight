@@ -67,6 +67,26 @@ npx tsx driver.ts
 `ts/test/smoke.test.ts` is the canonical example of spawning the daemon and
 driving it with the client. Stop the daemon with SIGTERM (it unlinks the socket).
 
+## Install (Homebrew)
+
+The repo doubles as a tap; `Formula/skylight.rb` is head-only (private repo,
+builds from main over SSH):
+
+```bash
+brew tap baileywickham/skylight git@github.com:baileywickham/skylight.git
+brew install --HEAD baileywickham/skylight/skylight
+```
+
+Installs `skylight` + `skylight-run` (keg-layout aware: ts client vendored in
+libexec, daemon delegated to launchd, never spawned as a terminal child).
+`post_install` signs `SkylightService.app` with a stable identity ("Skylight
+Dev" > Developer ID > Apple Development) and runs
+`scripts/install-launchagent.sh` (app → `~/Applications`, LaunchAgent
+bootstrapped) — NOT `brew services`, because TCC keys bare-binary grants to the
+Cellar path, which moves every HEAD reinstall; the signed bundle keeps grants
+across upgrades. First install needs the one-time TCC grants from the caveats.
+Upgrade with `brew reinstall skylight` (HEAD formulae don't auto-upgrade).
+
 ## Conventions & gotchas (learned the hard way — don't regress these)
 
 - **`npx tsx -e '...'` one-liners FAIL** here (esbuild CJS top-level-await). Write

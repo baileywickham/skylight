@@ -19,11 +19,29 @@
 # to switch modes.
 set -euo pipefail
 
-REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+# Two layouts (detected by where ts/ lives relative to this script):
+#   repo:      <repo>/scripts/skylight-run, ts client at <repo>/ts, debug
+#              daemon spawned as a dev-flow terminal child
+#   installed: <keg>/bin/skylight-run (Homebrew), ts client vendored at
+#              <keg>/libexec/ts, daemon owned by the launchd agent that
+#              `brew install` registered (TCC needs the launchd-launched
+#              .app, so this script never spawns the daemon itself here)
+BASE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 SOCK="$HOME/Library/Application Support/skylight/ipc/computeruse.sock"
-DAEMON="$REPO/.build/debug/SkylightService"
-TSX="$REPO/ts/node_modules/.bin/tsx"
 LOG="$HOME/Library/Logs/skylight/daemon.log"
+AGENT_LABEL="com.skylight.SkylightService"
+if [ -d "$BASE/ts" ]; then
+  INSTALLED=0
+  TS_DIR="$BASE/ts"
+  DAEMON="$BASE/.build/debug/SkylightService"
+  CLI="$BASE/.build/debug/skylight"
+else
+  INSTALLED=1
+  TS_DIR="$BASE/libexec/ts"
+  DAEMON="" # launchd-managed; see ensure_daemon
+  CLI="$BASE/bin/skylight"
+fi
+TSX="$TS_DIR/node_modules/.bin/tsx"
 
 die() { echo "skylight-run: $*" >&2; exit 1; }
 
@@ -40,10 +58,12 @@ socket_live() {
 }
 
 ensure_deps() {
-  [ -x "$TSX" ] || (cd "$REPO/ts" && npm install --silent) || die "npm install failed in $REPO/ts"
-  if [ ! -x "$DAEMON" ]; then
+  # Lazy npm install works in both layouts (the keg's libexec is user-writable;
+  # node comes from the user's environment, not a brew dependency).
+  [ -x "$TSX" ] || (cd "$TS_DIR" && npm install --silent) || die "npm install failed in $TS_DIR"
+  if [ "$INSTALLED" = 0 ] && [ ! -x "$DAEMON" ]; then
     echo "skylight-run: building daemon..." >&2
-    (cd "$REPO" && swift build) || die "swift build failed"
+    (cd "$BASE" && swift build) || die "swift build failed"
   fi
 }
 
@@ -51,22 +71,33 @@ ensure_daemon() {
   socket_live && return 0
   ensure_deps
   mkdir -p "$(dirname "$LOG")"
-  echo "skylight-run: starting SkylightService${SKYLIGHT_BACKGROUND:+ (background mode)}..." >&2
-  # Detached so it survives this shell; dev-flow launch is fine for TCC here
-  # because the local debug binary already holds its grants (see CLAUDE.md).
-  nohup "$DAEMON" >> "$LOG" 2>&1 &
-  disown
+  if [ "$INSTALLED" = 1 ]; then
+    # Installed mode never spawns a terminal-child daemon: TCC grants belong
+    # to the launchd-launched SkylightService.app, and a shell-spawned copy
+    # would run permission-less. Kick the agent instead.
+    [ -f "$HOME/Library/LaunchAgents/$AGENT_LABEL.plist" ] \
+      || die "launch agent not installed — run 'brew reinstall skylight' (its post_install registers it)"
+    launchctl kickstart "gui/$(id -u)/$AGENT_LABEL" 2>/dev/null \
+      || launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$AGENT_LABEL.plist" \
+      || die "cannot start $AGENT_LABEL via launchctl — check $LOG"
+  else
+    echo "skylight-run: starting SkylightService${SKYLIGHT_BACKGROUND:+ (background mode)}..." >&2
+    # Detached so it survives this shell; dev-flow launch is fine for TCC here
+    # because the local debug binary already holds its grants (see CLAUDE.md).
+    nohup "$DAEMON" >> "$LOG" 2>&1 &
+    disown
+  fi
   for _ in $(seq 1 50); do
     socket_live && return 0
     sleep 0.2
   done
-  die "daemon did not come up within 10s — check $LOG and '$REPO/.build/debug/skylight doctor'"
+  die "daemon did not come up within 10s — check $LOG and '$CLI doctor'"
 }
 
 case "${1:-}" in
   --status)
     ensure_deps
-    "$REPO/.build/debug/skylight" doctor
+    "$CLI" doctor
     pgrep -fl SkylightService || echo "daemon: not running"
     exit 0
     ;;
@@ -80,7 +111,7 @@ case "${1:-}" in
     TMPDIR_DRIVER="$(mktemp -d)"
     TMP="$TMPDIR_DRIVER/driver.mts"   # .mts forces ESM => top-level await works
     {
-      echo "import { sky } from '$REPO/ts/src/index.js';"
+      echo "import { sky } from '$TS_DIR/src/index.js';"
       echo "try {"
       cat <<<"$2"
       echo "} finally { sky.close(); }"

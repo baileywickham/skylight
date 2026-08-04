@@ -32,7 +32,7 @@ final class PackagingTests: XCTestCase {
     }
 
     func testShellScriptsParse() throws {
-        for script in ["scripts/package-app.sh", "scripts/install-launchagent.sh"] {
+        for script in ["scripts/package-app.sh", "scripts/install-launchagent.sh", "scripts/skylight-run"] {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/bin/bash")
             p.arguments = ["-n", repoRoot.appendingPathComponent(script).path]
