@@ -150,13 +150,39 @@ public final class Actuator {
         return (app, window, geometry)
     }
 
-    /// Foreground (default) mode only: bring the target frontmost so session
-    /// events land in it and post-action screenshots are unobscured. In
-    /// background mode this is a no-op for EVERY action — AX element actions
-    /// need no focus at all, and synthetic events are routed per-pid instead.
-    private func raiseUnlessBackground(app: NSRunningApplication, window: AXUIElement, background: Bool) {
-        guard shouldActivate(background: background) else { return }
+    /// Readies the target for an action.
+    ///
+    /// Foreground (default): bring it frontmost so session events land in it
+    /// and post-action screenshots are unobscured.
+    ///
+    /// Background: never raise. Actions that deliver synthetic events also need
+    /// the app to be AppKit-active for key equivalents to resolve, so those get
+    /// `focusWithoutRaise`; pure AX-element actions skip it, since they work
+    /// regardless of focus and flipping the user's frontmost app to inactive is
+    /// a real (if brief) disturbance not worth paying for nothing.
+    private func prepareTarget(app: NSRunningApplication, window: AXUIElement,
+                               background: Bool, action: ActuatorAction) {
+        guard shouldActivate(background: background) else {
+            if deliversSyntheticEvents(action: action) {
+                focusWithoutRaise(app: app, window: window)
+            }
+            return
+        }
         activateAndRaise(app: app, window: window)
+    }
+
+    /// Chromium drops synthetic clicks into a backgrounded window unless they
+    /// follow a user gesture; a throwaway pair outside every window supplies
+    /// one. No-op for non-Chromium apps and in foreground mode.
+    private func primeUserActivationIfNeeded(app: NSRunningApplication, background: Bool) {
+        guard background, needsUserActivationPrimer(bundleID: app.bundleIdentifier) else { return }
+        let pid = app.processIdentifier
+        for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+            let event = CGEvent(mouseEventSource: nil, mouseType: type,
+                                mouseCursorPosition: userActivationPrimerPoint, mouseButton: .left)
+            post(event, pid: pid, background: true)
+        }
+        usleep(5_000)
     }
 
     /// Delivers a synthetic event. Default: session HID tap (frontmost app).
@@ -182,12 +208,13 @@ public final class Actuator {
             let app = try resolveApproved(input.app)
             let element = try capture.element(forIndex: index, appPid: app.processIdentifier)
             let window = try capture.focusedWindow(of: app)
-            raiseUnlessBackground(app: app, window: window, background: background) // unobscured post-action screenshots
+            prepareTarget(app: app, window: window, background: background, action: .elementClick)
             let err = AXUIElementPerformAction(element, kAXPressAction as CFString)
             guard err == .success else { throw mapAXError(err, action: "click[\(index)]") }
         } else if let x = input.x, let y = input.y {
             let (app, window, geometry) = try target(input.app, needsGeometry: true)
-            raiseUnlessBackground(app: app, window: window, background: background)
+            prepareTarget(app: app, window: window, background: background, action: .coordinateClick)
+            primeUserActivationIfNeeded(app: app, background: background)
             let point = globalPoint(fromScreenshotX: x, y: y, geometry: geometry!)
             let (button, down, up, _) = try mouseButton(input.mouse_button)
             let clicks = input.click_count ?? 1
@@ -211,7 +238,7 @@ public final class Actuator {
         let background = effectiveBackground(input.background)
         let chord = try parseKeyChord(input.keys)
         let (app, window, _) = try target(input.app, needsGeometry: false)
-        raiseUnlessBackground(app: app, window: window, background: background)
+        prepareTarget(app: app, window: window, background: background, action: .pressKey)
         // The chord parse yields ANSI key codes; remap character keys to the
         // ACTIVE keyboard layout (on e.g. Dvorak the ANSI "c" code types "j",
         // so Cmd+c would fire an unbound shortcut and silently no-op).
@@ -240,7 +267,7 @@ public final class Actuator {
         try guardNotPaused()
         let background = effectiveBackground(input.background)
         let (app, window, _) = try target(input.app, needsGeometry: false)
-        raiseUnlessBackground(app: app, window: window, background: background)
+        prepareTarget(app: app, window: window, background: background, action: .typeText)
         // Unicode key events into current focus, ~20 UTF-16 units per event
         // (surrogate pairs are never split across events; see utf16Chunks).
         for chunk in utf16Chunks(input.text) {
@@ -271,7 +298,7 @@ public final class Actuator {
         let app = try resolveApproved(input.app)
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
-        raiseUnlessBackground(app: app, window: window, background: background)
+        prepareTarget(app: app, window: window, background: background, action: .scroll)
 
         // Move the cursor over the element's VISIBLE center, then post pixel
         // scrolls of one visible-height/width per page. Scrollable content
@@ -306,7 +333,7 @@ public final class Actuator {
         let app = try resolveApproved(input.app)
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
-        raiseUnlessBackground(app: app, window: window, background: background)
+        prepareTarget(app: app, window: window, background: background, action: .setValue)
         let err = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, input.value as CFString)
         guard err == .success else { throw mapAXError(err, action: "set_value[\(input.element_index)]") }
         postActionSleep()
@@ -318,7 +345,7 @@ public final class Actuator {
         let background = effectiveBackground(input.background)
         let (button, down, up, dragged) = try mouseButton(input.mouse_button)
         let (app, window, geometry) = try target(input.app, needsGeometry: true)
-        raiseUnlessBackground(app: app, window: window, background: background)
+        prepareTarget(app: app, window: window, background: background, action: .drag)
         let from = globalPoint(fromScreenshotX: input.from_x, y: input.from_y, geometry: geometry!)
         let to = globalPoint(fromScreenshotX: input.to_x, y: input.to_y, geometry: geometry!)
         post(CGEvent(mouseEventSource: nil, mouseType: down, mouseCursorPosition: from, mouseButton: button),
@@ -343,7 +370,7 @@ public final class Actuator {
         let app = try resolveApproved(input.app)
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
-        raiseUnlessBackground(app: app, window: window, background: background)
+        prepareTarget(app: app, window: window, background: background, action: .performSecondaryAction)
         let err = AXUIElementPerformAction(element, input.action as CFString)
         guard err == .success else { throw mapAXError(err, action: "perform_secondary_action(\(input.action))") }
         postActionSleep()
@@ -358,7 +385,7 @@ public final class Actuator {
         let app = try resolveApproved(input.app)
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
-        raiseUnlessBackground(app: app, window: window, background: background)
+        prepareTarget(app: app, window: window, background: background, action: .selectText)
         guard let value: String = axAttribute(element, kAXValueAttribute) else {
             throw SkyServiceError(code: .elementNotActionable,
                                   message: "select_text[\(input.element_index)]: element has no text value")
