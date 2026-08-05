@@ -115,13 +115,22 @@ final class AppCaptureState {
     var enablementDone = false
 }
 
-/// NOT thread-safe (ElementIndexMap and per-pid state are unsynchronized):
-/// all capture and index resolution must stay on the daemon's global serial
-/// actuation queue, where the router already runs handlers.
+/// Safe for concurrent use across DIFFERENT pids only.
+///
+/// All capture state is partitioned per pid, so requests for different apps
+/// touch disjoint `AppCaptureState` objects; the lock below guards just the
+/// lookup table that hands them out. An individual `AppCaptureState` (and the
+/// `ElementIndexMap` inside it) is still unsynchronized, which is sound because
+/// `ActuationScheduler` serializes every request that shares an app key — see
+/// RequestClassifier. Two concurrent requests for the SAME pid would corrupt
+/// the index map, and the scheduler is what prevents that.
 public final class AXCapture {
     private let caps: TreeCaps
     private let messagingTimeout: Float
     private let webAreaRetrySeconds: TimeInterval
+    /// Guards `stateByPid` itself. Held only for the dictionary access, never
+    /// across an AX call — those are slow and must not serialize other apps.
+    private let stateLock = NSLock()
     private var stateByPid: [pid_t: AppCaptureState] = [:]
 
     public init(caps: TreeCaps = .standard, messagingTimeout: Float = 0.25,
@@ -132,10 +141,19 @@ public final class AXCapture {
     }
 
     private func state(for pid: pid_t) -> AppCaptureState {
+        stateLock.lock()
+        defer { stateLock.unlock() }
         if let existing = stateByPid[pid] { return existing }
         let fresh = AppCaptureState()
         stateByPid[pid] = fresh
         return fresh
+    }
+
+    /// Read-only peek that does not create state for an unseen pid.
+    private func existingState(for pid: pid_t) -> AppCaptureState? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return stateByPid[pid]
     }
 
     /// kAXWindowsAttribute → [AXUIElement]. CFTypeID is the only runtime-correct
@@ -329,17 +347,18 @@ public final class AXCapture {
     /// True when a committed diff baseline exists for `pid` — lets tests
     /// assert that a failed capture path leaves the baseline untouched.
     public func hasBaseline(forPid pid: pid_t) -> Bool {
-        stateByPid[pid]?.previousLines != nil
+        existingState(for: pid)?.previousLines != nil
     }
 
     /// Resolves an element_index back to its live AXUIElement for action calls.
     public func element(forIndex index: Int, appPid pid: pid_t) throws -> AXUIElement {
-        guard let identity = stateByPid[pid]?.map.identity(forIndex: index),
+        let s = existingState(for: pid)
+        guard let identity = s?.map.identity(forIndex: index),
               let axIdentity = identity as? AXIdentity else {
             throw SkyServiceError(code: .staleElementIndex,
                                   message: "element_index \(index) is unknown for this app — call get_app_state and retry")
         }
-        if !(stateByPid[pid]?.map.isInLatestCapture(index) ?? false) {
+        if !(s?.map.isInLatestCapture(index) ?? false) {
             throw SkyServiceError(code: .staleElementIndex,
                                   message: "element_index \(index) disappeared from the latest capture — call get_app_state and retry")
         }
@@ -347,13 +366,13 @@ public final class AXCapture {
     }
 
     public func latestGeometry(forPid pid: pid_t) -> CaptureGeometry? {
-        stateByPid[pid]?.latestGeometry
+        existingState(for: pid)?.latestGeometry
     }
 
     /// Window id of the last committed capture for `pid` (nil if none or the
     /// bridge couldn't resolve one). Coordinate actions raise THIS window so
     /// events land where the geometry says they will.
     public func latestWindowID(forPid pid: pid_t) -> Int? {
-        stateByPid[pid]?.previousWindowID
+        existingState(for: pid)?.previousWindowID
     }
 }

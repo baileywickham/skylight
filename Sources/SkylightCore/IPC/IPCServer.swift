@@ -9,16 +9,24 @@ public enum IPCError: Error, Equatable {
 }
 
 /// Unix-domain-socket server speaking one JSON object per line.
-/// All handlers run on ONE global serial queue across every connection, so
-/// actuation from concurrent (or orphaned) clients can never interleave.
+///
+/// Requests are admitted by `ActuationScheduler`, which decides what may
+/// overlap: background work against different apps runs in parallel, while
+/// foreground work (which activates apps and moves the real cursor) runs alone.
+/// The default classifier marks EVERYTHING exclusive, so a server constructed
+/// without one behaves exactly like the original single-serial-queue design.
 public final class IPCServer {
     public typealias Handler = (Request) -> Response
 
     private let socketPath: String
     private let requestTimeout: TimeInterval
     private let handler: Handler
-    /// The global actuation queue: every request from every connection lands here.
-    private let actuationQueue = DispatchQueue(label: "com.skylight.actuation")
+    private let classify: (Request) -> RequestClass
+    private let scheduler = ActuationScheduler()
+    /// Requests dispatch concurrently and then queue for admission inside the
+    /// scheduler, so a request waiting on one app does not hold up another.
+    private let actuationQueue = DispatchQueue(label: "com.skylight.actuation",
+                                               attributes: .concurrent)
     /// Guards `listenFD`, which is touched from start()/stop() and the accept thread.
     private let stateLock = NSLock()
     private var listenFD: Int32 = -1
@@ -28,9 +36,12 @@ public final class IPCServer {
         return listenFD >= 0
     }
 
-    public init(socketPath: String, requestTimeout: TimeInterval = 30, handler: @escaping Handler) {
+    public init(socketPath: String, requestTimeout: TimeInterval = 30,
+                classify: @escaping (Request) -> RequestClass = { _ in .exclusive },
+                handler: @escaping Handler) {
         self.socketPath = socketPath
         self.requestTimeout = requestTimeout
+        self.classify = classify
         self.handler = handler
     }
 
@@ -147,8 +158,11 @@ public final class IPCServer {
         }
         var response: Response?
         let done = DispatchSemaphore(value: 0)
-        actuationQueue.async { [handler] in
-            response = handler(request)
+        let requestClass = classify(request)
+        actuationQueue.async { [handler, scheduler] in
+            scheduler.run(requestClass) {
+                response = handler(request)
+            }
             done.signal()
         }
         if done.wait(timeout: .now() + requestTimeout) == .timedOut {
