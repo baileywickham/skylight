@@ -33,6 +33,33 @@ export interface ListWindowsResult {
 export interface ListWindowsInput {
     app: AppIdentifier;
 }
+export interface PermissionStatus {
+    accessibility: boolean;
+    screen_recording: boolean;
+}
+export interface SkyLightCapabilities {
+    /**
+     * Background actions can make an app AppKit-active without raising it, so
+     * menu key equivalents (Cmd+c) fire in a non-frontmost app. False on a macOS
+     * release where the private symbols are gone — background actions still work,
+     * but revert to best-effort for keyboard/coordinate input.
+     */
+    focus_without_raise: boolean;
+    /** Experimental SkyLight event channel; opt in with SKYLIGHT_TRUSTED_EVENTS=1. */
+    trusted_events: boolean;
+}
+export interface CapabilitiesResult {
+    version: string;
+    permissions: PermissionStatus;
+    skylight: SkyLightCapabilities;
+    /** Daemon-wide default for `background` (SKYLIGHT_BACKGROUND). */
+    background_default: boolean;
+    /**
+     * Actions against DIFFERENT apps may run concurrently. Requests for one app
+     * are always serialized, and foreground actions always run alone.
+     */
+    parallel_actuation: boolean;
+}
 export interface Screenshot {
     /** file:// path to the PNG under the daemon's shots dir ($SKYLIGHT_SHOTS_DIR). */
     url: string;
@@ -128,7 +155,7 @@ export interface SelectTextInput {
     /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
     background?: boolean;
 }
-import type { ActionResult, AppState, ClickInput, DragInput, GetAppStateInput, ListAppsInput, ListAppsResult, ListWindowsInput, ListWindowsResult, PerformSecondaryActionInput, PressKeyInput, ScrollInput, SelectTextInput, SetValueInput, TypeTextInput } from "./types.js";
+import type { ActionResult, AppState, CapabilitiesResult, ClickInput, DragInput, GetAppStateInput, ListAppsInput, ListAppsResult, ListWindowsInput, ListWindowsResult, PerformSecondaryActionInput, PressKeyInput, ScrollInput, SelectTextInput, SetValueInput, TypeTextInput } from "./types.js";
 export interface SkyConfig {
     socket_path: string;
     post_action_sleep_ms: number;
@@ -163,6 +190,8 @@ export declare class SkyClient {
     private onData;
     call<T>(method: string, params: unknown): Promise<T>;
     close(): void;
+    /** What this daemon can do here: TCC grants, private-symbol availability, parallelism. */
+    capabilities(): Promise<CapabilitiesResult>;
     list_apps(input?: ListAppsInput): Promise<ListAppsResult>;
     list_windows(input: ListWindowsInput): Promise<ListWindowsResult>;
     get_app_state(input: GetAppStateInput): Promise<AppState>;

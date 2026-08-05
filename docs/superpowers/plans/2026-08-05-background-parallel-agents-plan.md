@@ -106,6 +106,20 @@ Tests: contract test (Swift + TS) covers the new fixture.
 `CLAUDE.md` (API list, background-mode gotchas, concurrency invariant),
 `skill/SKILL.md` (background + parallel usage), spec cross-link.
 
+## Finding during implementation (task 7)
+
+The scheduler was correct and its unit tests passed, but parallelism did not
+appear through the real daemon: `IPCServer.serve` handled each decoded line
+synchronously on the connection's reader thread, so requests from one client —
+which is how `Promise.all` sends them — serialized before ever reaching the
+scheduler. Fixed by dispatching per-request on a separate `connectionQueue`,
+with a per-connection write lock and a `DispatchGroup` so the fd outlives its
+in-flight handlers. Responses may now return out of order, which the protocol
+already permitted (clients match on request id).
+
+`IPCConcurrencyTests` covers this at the socket layer, since no scheduler-level
+test could have caught it.
+
 ## Verification
 
 - `swift build 2>&1 | grep -i warning` → empty

@@ -72,7 +72,24 @@ struct LiveAXNode: TreeNode {
 /// AXManualAccessibility/AXEnhancedUserInterface) produced a tree without any
 /// web content — the settle was too short and one re-walk is warranted.
 public func needsWebAreaRetry(enablementJustApplied: Bool, lines: [TreeLine]) -> Bool {
-    enablementJustApplied && !lines.contains { $0.text.contains("AXWebArea") }
+    enablementJustApplied && !hasWebArea(lines)
+}
+
+public func hasWebArea(_ lines: [TreeLine]) -> Bool {
+    lines.contains { $0.text.contains("AXWebArea") }
+}
+
+/// Chromium drops its accessibility tree when a window is occluded or moved to
+/// the background long enough, and the AXManualAccessibility flag that made it
+/// publish one is applied only on the app's FIRST capture. Background agents
+/// work on exactly such windows, so without this a long background session
+/// silently degrades to an empty tree.
+///
+/// Re-enable only on the transition — an app that has published web content
+/// before and now has none. An app that never had a web area (every AppKit app)
+/// must not pay for a re-enable on every capture.
+public func shouldReapplyEnablement(previouslyHadWebArea: Bool, currentHasWebArea: Bool) -> Bool {
+    previouslyHadWebArea && !currentHasWebArea
 }
 
 /// Window-aware diff gate: diff only against a baseline from the SAME window.
@@ -113,6 +130,9 @@ final class AppCaptureState {
     var previousWindowID: Int?
     var latestGeometry: CaptureGeometry?
     var enablementDone = false
+    /// Whether this app has ever published web content, so a later capture that
+    /// lost it can be recognized as a dropped tree rather than a native app.
+    var hadWebArea = false
 }
 
 /// Safe for concurrent use across DIFFERENT pids only.
@@ -282,7 +302,17 @@ public final class AXCapture {
                 usleep(500_000)
                 serialized = AXTreeSerializer(caps: caps).serialize(root: root, map: s.map)
             }
+        } else if shouldReapplyEnablement(previouslyHadWebArea: s.hadWebArea,
+                                          currentHasWebArea: hasWebArea(serialized.lines)) {
+            // The app published web content before and has none now — an
+            // occluded/backgrounded Chromium window that dropped its tree.
+            // Re-flip the enablement flags and re-walk once.
+            AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+            usleep(300_000)
+            serialized = AXTreeSerializer(caps: caps).serialize(root: root, map: s.map)
         }
+        if hasWebArea(serialized.lines) { s.hadWebArea = true }
 
         // Milestone 2: diff-by-default on the sticky index map; disableDiff honored.
         // M3: window-aware — a window change forces a full tree (see canDiff).

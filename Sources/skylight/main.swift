@@ -7,6 +7,14 @@ func doctor() {
     print("  accessibility:    \(status.accessibility ? "granted" : "MISSING")")
     print("  screen recording: \(status.screen_recording ? "granted" : "MISSING (or lapsed — macOS re-prompts periodically)")")
     for line in Permissions.instructions(for: status) { print("  -> \(line)") }
+    let caps = SkyLightBridge.capabilities()
+    print("  focus w/o raise:  \(caps.focus_without_raise ? "available" : "UNAVAILABLE")")
+    if !caps.focus_without_raise {
+        print("  -> background actions still work, but menu shortcuts (Cmd+c) may not fire")
+        print("     in a non-frontmost app: this macOS build no longer exposes the SkyLight")
+        print("     symbols skylight uses to activate an app without raising it.")
+    }
+    print("  trusted events:   \(caps.trusted_events ? "enabled" : "off (experimental; SKYLIGHT_TRUSTED_EVENTS=1)")")
     let live = Permissions.socketIsLive(at: SkylightPaths.socketPath)
     print("  socket:           \(live ? "live" : "not listening") at \(SkylightPaths.socketPath)")
     if !live { print("  -> run 'skylight start'") }

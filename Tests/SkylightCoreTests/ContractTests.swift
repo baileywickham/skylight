@@ -22,6 +22,7 @@ final class ContractTests: XCTestCase {
             let request = try JSONDecoder().decode(Request.self, from: Data(req.line.utf8))
             XCTAssertEqual(request.method, req.method)
             switch req.method {
+            case "capabilities": break // no params
             case "list_apps": _ = try request.decodeParams(ListAppsInput.self)
             case "list_windows": _ = try request.decodeParams(ListWindowsInput.self)
             case "get_app_state": _ = try request.decodeParams(GetAppStateInput.self)
@@ -42,6 +43,7 @@ final class ContractTests: XCTestCase {
         for resp in try loadFixtures().responses {
             let data = try JSONEncoder().encode(resp.json)
             switch resp.decodes_to {
+            case "CapabilitiesResult": _ = try JSONDecoder().decode(CapabilitiesResult.self, from: data)
             case "ListAppsResult": _ = try JSONDecoder().decode(ListAppsResult.self, from: data)
             case "ListWindowsResult": _ = try JSONDecoder().decode(ListWindowsResult.self, from: data)
             case "AppState": _ = try JSONDecoder().decode(AppState.self, from: data)

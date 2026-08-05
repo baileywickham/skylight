@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildRequest } from "../src/client.js";
-import type { ActionResult, AppState, ListAppsResult, ListWindowsResult } from "../src/types.js";
+import type { ActionResult, AppState, CapabilitiesResult, ListAppsResult, ListWindowsResult } from "../src/types.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixtures = JSON.parse(
@@ -24,7 +24,13 @@ describe("contract", () => {
 
   it("response fixtures satisfy the declared TS result types", () => {
     for (const resp of fixtures.responses) {
-      if (resp.decodes_to === "ListAppsResult") {
+      if (resp.decodes_to === "CapabilitiesResult") {
+        const r = resp.json as CapabilitiesResult;
+        expect(typeof r.version).toBe("string");
+        expect(typeof r.permissions.accessibility).toBe("boolean");
+        expect(typeof r.skylight.focus_without_raise).toBe("boolean");
+        expect(typeof r.parallel_actuation).toBe("boolean");
+      } else if (resp.decodes_to === "ListAppsResult") {
         const r = resp.json as ListAppsResult;
         expect(Array.isArray(r.apps)).toBe(true);
         expect(typeof r.apps[0].pid).toBe("number");
