@@ -103,7 +103,10 @@ describe.runIf(gated)("live smoke (TextEdit)", () => {
     // screenshot), so an ungranted run must skip here exactly like the first
     // test does, not fail.
     await skipOnPermissionDenied("select_text smoke", async () => {
-      const state = await sky.get_app_state({ app: "TextEdit" });
+      // disableDiff is REQUIRED here: captures diff by default, and the text
+      // area is unchanged since the previous test's capture, so a diffed
+      // response would omit the very line this test looks up an index from.
+      const state = await sky.get_app_state({ app: "TextEdit", disableDiff: true });
       const textArea = state.text.split("\n").find((l) => l.includes("AXTextArea"));
       expect(textArea).toBeDefined();
       const index = Number(textArea!.match(/^\s*\[(\d+)\]/)![1]);
