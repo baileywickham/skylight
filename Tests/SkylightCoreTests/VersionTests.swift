@@ -3,6 +3,6 @@ import SkylightCore
 
 final class VersionTests: XCTestCase {
     func testVersionConstant() {
-        XCTAssertEqual(SkylightVersion.current, "0.1.0")
+        XCTAssertEqual(SkylightVersion.current, "0.2.0")
     }
 }
