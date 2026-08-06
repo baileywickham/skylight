@@ -86,6 +86,31 @@ public struct AppState: Codable, Equatable {
     }
 }
 
+/// What this daemon on this machine can actually do. Lets a client tell a
+/// degraded install (missing TCC grant, or a macOS release that dropped a
+/// private symbol) from a working one, instead of inferring it from flaky
+/// background actions.
+public struct CapabilitiesResult: Codable, Equatable {
+    public let version: String
+    public let permissions: PermissionStatus
+    public let skylight: SkyLightCapabilities
+    /// Daemon-wide default for the `background` flag (SKYLIGHT_BACKGROUND).
+    public let background_default: Bool
+    /// True when actions against DIFFERENT apps can run concurrently. Requests
+    /// for one app are always serialized, and foreground actions always run
+    /// alone.
+    public let parallel_actuation: Bool
+
+    public init(version: String, permissions: PermissionStatus, skylight: SkyLightCapabilities,
+                background_default: Bool, parallel_actuation: Bool) {
+        self.version = version
+        self.permissions = permissions
+        self.skylight = skylight
+        self.background_default = background_default
+        self.parallel_actuation = parallel_actuation
+    }
+}
+
 public struct ActionResult: Codable, Equatable {
     public let done: Bool
     public init(done: Bool) { self.done = done }

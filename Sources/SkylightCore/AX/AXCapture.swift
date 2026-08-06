@@ -72,7 +72,24 @@ struct LiveAXNode: TreeNode {
 /// AXManualAccessibility/AXEnhancedUserInterface) produced a tree without any
 /// web content — the settle was too short and one re-walk is warranted.
 public func needsWebAreaRetry(enablementJustApplied: Bool, lines: [TreeLine]) -> Bool {
-    enablementJustApplied && !lines.contains { $0.text.contains("AXWebArea") }
+    enablementJustApplied && !hasWebArea(lines)
+}
+
+public func hasWebArea(_ lines: [TreeLine]) -> Bool {
+    lines.contains { $0.text.contains("AXWebArea") }
+}
+
+/// Chromium drops its accessibility tree when a window is occluded or moved to
+/// the background long enough, and the AXManualAccessibility flag that made it
+/// publish one is applied only on the app's FIRST capture. Background agents
+/// work on exactly such windows, so without this a long background session
+/// silently degrades to an empty tree.
+///
+/// Re-enable only on the transition — an app that has published web content
+/// before and now has none. An app that never had a web area (every AppKit app)
+/// must not pay for a re-enable on every capture.
+public func shouldReapplyEnablement(previouslyHadWebArea: Bool, currentHasWebArea: Bool) -> Bool {
+    previouslyHadWebArea && !currentHasWebArea
 }
 
 /// Window-aware diff gate: diff only against a baseline from the SAME window.
@@ -113,15 +130,27 @@ final class AppCaptureState {
     var previousWindowID: Int?
     var latestGeometry: CaptureGeometry?
     var enablementDone = false
+    /// Whether this app has ever published web content, so a later capture that
+    /// lost it can be recognized as a dropped tree rather than a native app.
+    var hadWebArea = false
 }
 
-/// NOT thread-safe (ElementIndexMap and per-pid state are unsynchronized):
-/// all capture and index resolution must stay on the daemon's global serial
-/// actuation queue, where the router already runs handlers.
+/// Safe for concurrent use across DIFFERENT pids only.
+///
+/// All capture state is partitioned per pid, so requests for different apps
+/// touch disjoint `AppCaptureState` objects; the lock below guards just the
+/// lookup table that hands them out. An individual `AppCaptureState` (and the
+/// `ElementIndexMap` inside it) is still unsynchronized, which is sound because
+/// `ActuationScheduler` serializes every request that shares an app key — see
+/// RequestClassifier. Two concurrent requests for the SAME pid would corrupt
+/// the index map, and the scheduler is what prevents that.
 public final class AXCapture {
     private let caps: TreeCaps
     private let messagingTimeout: Float
     private let webAreaRetrySeconds: TimeInterval
+    /// Guards `stateByPid` itself. Held only for the dictionary access, never
+    /// across an AX call — those are slow and must not serialize other apps.
+    private let stateLock = NSLock()
     private var stateByPid: [pid_t: AppCaptureState] = [:]
 
     public init(caps: TreeCaps = .standard, messagingTimeout: Float = 0.25,
@@ -132,10 +161,19 @@ public final class AXCapture {
     }
 
     private func state(for pid: pid_t) -> AppCaptureState {
+        stateLock.lock()
+        defer { stateLock.unlock() }
         if let existing = stateByPid[pid] { return existing }
         let fresh = AppCaptureState()
         stateByPid[pid] = fresh
         return fresh
+    }
+
+    /// Read-only peek that does not create state for an unseen pid.
+    private func existingState(for pid: pid_t) -> AppCaptureState? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return stateByPid[pid]
     }
 
     /// kAXWindowsAttribute → [AXUIElement]. CFTypeID is the only runtime-correct
@@ -264,7 +302,17 @@ public final class AXCapture {
                 usleep(500_000)
                 serialized = AXTreeSerializer(caps: caps).serialize(root: root, map: s.map)
             }
+        } else if shouldReapplyEnablement(previouslyHadWebArea: s.hadWebArea,
+                                          currentHasWebArea: hasWebArea(serialized.lines)) {
+            // The app published web content before and has none now — an
+            // occluded/backgrounded Chromium window that dropped its tree.
+            // Re-flip the enablement flags and re-walk once.
+            AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+            usleep(300_000)
+            serialized = AXTreeSerializer(caps: caps).serialize(root: root, map: s.map)
         }
+        if hasWebArea(serialized.lines) { s.hadWebArea = true }
 
         // Milestone 2: diff-by-default on the sticky index map; disableDiff honored.
         // M3: window-aware — a window change forces a full tree (see canDiff).
@@ -329,17 +377,18 @@ public final class AXCapture {
     /// True when a committed diff baseline exists for `pid` — lets tests
     /// assert that a failed capture path leaves the baseline untouched.
     public func hasBaseline(forPid pid: pid_t) -> Bool {
-        stateByPid[pid]?.previousLines != nil
+        existingState(for: pid)?.previousLines != nil
     }
 
     /// Resolves an element_index back to its live AXUIElement for action calls.
     public func element(forIndex index: Int, appPid pid: pid_t) throws -> AXUIElement {
-        guard let identity = stateByPid[pid]?.map.identity(forIndex: index),
+        let s = existingState(for: pid)
+        guard let identity = s?.map.identity(forIndex: index),
               let axIdentity = identity as? AXIdentity else {
             throw SkyServiceError(code: .staleElementIndex,
                                   message: "element_index \(index) is unknown for this app — call get_app_state and retry")
         }
-        if !(stateByPid[pid]?.map.isInLatestCapture(index) ?? false) {
+        if !(s?.map.isInLatestCapture(index) ?? false) {
             throw SkyServiceError(code: .staleElementIndex,
                                   message: "element_index \(index) disappeared from the latest capture — call get_app_state and retry")
         }
@@ -347,13 +396,13 @@ public final class AXCapture {
     }
 
     public func latestGeometry(forPid pid: pid_t) -> CaptureGeometry? {
-        stateByPid[pid]?.latestGeometry
+        existingState(for: pid)?.latestGeometry
     }
 
     /// Window id of the last committed capture for `pid` (nil if none or the
     /// bridge couldn't resolve one). Coordinate actions raise THIS window so
     /// events land where the geometry says they will.
     public func latestWindowID(forPid pid: pid_t) -> Int? {
-        stateByPid[pid]?.previousWindowID
+        existingState(for: pid)?.previousWindowID
     }
 }

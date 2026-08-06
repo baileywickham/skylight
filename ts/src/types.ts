@@ -40,6 +40,36 @@ export interface ListWindowsInput {
   app: AppIdentifier;
 }
 
+export interface PermissionStatus {
+  accessibility: boolean;
+  screen_recording: boolean;
+}
+
+export interface SkyLightCapabilities {
+  /**
+   * Background actions can make an app AppKit-active without raising it, so
+   * menu key equivalents (Cmd+c) fire in a non-frontmost app. False on a macOS
+   * release where the private symbols are gone — background actions still work,
+   * but revert to best-effort for keyboard/coordinate input.
+   */
+  focus_without_raise: boolean;
+  /** Experimental SkyLight event channel; opt in with SKYLIGHT_TRUSTED_EVENTS=1. */
+  trusted_events: boolean;
+}
+
+export interface CapabilitiesResult {
+  version: string;
+  permissions: PermissionStatus;
+  skylight: SkyLightCapabilities;
+  /** Daemon-wide default for `background` (SKYLIGHT_BACKGROUND). */
+  background_default: boolean;
+  /**
+   * Actions against DIFFERENT apps may run concurrently. Requests for one app
+   * are always serialized, and foreground actions always run alone.
+   */
+  parallel_actuation: boolean;
+}
+
 export interface Screenshot {
   /** file:// path to the PNG under the daemon's shots dir ($SKYLIGHT_SHOTS_DIR). */
   url: string;

@@ -48,6 +48,7 @@ All methods take `app` (app name, e.g. `"Finder"`). Full types: `~/workspace/sky
 | `drag` | `from_x`,`from_y`,`to_x`,`to_y` (screenshot px) |
 | `perform_secondary_action` | `element_index`, `action` (e.g. `"AXShowMenu"`) |
 | `select_text` | `element_index`, `text`, `prefix?`, `suffix?`, `selection_type` |
+| `capabilities` | — (TCC grants, private-symbol availability, `parallel_actuation`) |
 
 Every action (`click`, `press_key`, `type_text`, `scroll`, `set_value`, `drag`, `perform_secondary_action`, `select_text`) also accepts `background?: true`.
 
@@ -67,9 +68,37 @@ Every action (`click`, `press_key`, `type_text`, `scroll`, `set_value`, `drag`, 
 - **Finder**: the desktop belongs to Finder — its tree often starts with the desktop scroll area, not a window. Use `list_windows` + `window_id` to target an actual Finder window.
 - **Multi-window apps**: `get_app_state` defaults to the focused window. When the user says "this window", check `list_windows` and pick by `is_focused` / title.
 
+## Background & parallel work
+
+`background: true` on any action drives the app **without raising it or moving the
+user's cursor** — they keep working while you do. Menu shortcuts (`Cmd+s`) fire
+correctly in background mode: the daemon makes the app AppKit-active without
+raising the window.
+
+Background actions against **different apps run in parallel**, so fan out with
+`Promise.all` when the work is independent:
+
+```ts
+await Promise.all([
+  sky.type_text({ app: "Notes", text: "draft", background: true }),
+  sky.click({ app: "Safari", element_index: 12, background: true }),
+]);
+```
+
+Rules:
+- Two calls against the **same app** are serialized automatically — safe, just not faster.
+- **Foreground** actions (the default) always run alone, so mixing them into a
+  `Promise.all` serializes the whole batch. Set `background: true` on all of them.
+- Capture first (`get_app_state` per app) so each app has geometry and indices.
+- Check `sky.capabilities()` if background input misbehaves: `skylight.focus_without_raise:
+  false` means this macOS build dropped the private symbols and background mode has
+  fallen back to best-effort (menu shortcuts may not fire).
+- Chromium apps: background right-click on **web content** gets coerced to
+  left-click; use `perform_secondary_action` with `AXShowMenu` instead.
+
 ## Gotchas
 
-- Actions activate the target app (steals focus) by default. Pass `background: true` on any action to act without stealing focus — reliable for `element_index` actions, best-effort for coordinates/keys (menu shortcuts need frontmost).
+- Actions activate the target app (steals focus) by default. Pass `background: true` on any action to work without stealing focus — see "Background & parallel work" below.
 - If an action fails `approval_required`: the actuation allowlist is on — `skylight approve "<App>"` (binary: `~/workspace/skylight/.build/debug/skylight`), or `skylight allow-all` to disable the gate.
 - Coordinates are **screenshot pixels**, not screen points — take them from the screenshot you just captured.
 - `type_text` types at the current focus/caret — `click` the target field first unless the app focuses it for you.

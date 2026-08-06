@@ -1,5 +1,6 @@
 {
   "requests": [
+    { "method": "capabilities", "params": {}, "line": "{\"id\":1,\"method\":\"capabilities\",\"params\":{}}" },
     { "method": "list_apps", "params": {}, "line": "{\"id\":1,\"method\":\"list_apps\",\"params\":{}}" },
     { "method": "list_apps", "params": { "include_menu_bar_apps": true }, "line": "{\"id\":1,\"method\":\"list_apps\",\"params\":{\"include_menu_bar_apps\":true}}" },
     { "method": "list_windows", "params": { "app": "Notes" }, "line": "{\"id\":1,\"method\":\"list_windows\",\"params\":{\"app\":\"Notes\"}}" },
@@ -18,6 +19,7 @@
     { "method": "select_text", "params": { "app": "Notes", "element_index": 4, "text": "hi", "selection_type": "select" }, "line": "{\"id\":1,\"method\":\"select_text\",\"params\":{\"app\":\"Notes\",\"element_index\":4,\"text\":\"hi\",\"selection_type\":\"select\"}}" }
   ],
   "responses": [
+    { "name": "capabilities", "decodes_to": "CapabilitiesResult", "json": { "version": "0.1.0", "permissions": { "accessibility": true, "screen_recording": true }, "skylight": { "focus_without_raise": true, "trusted_events": false }, "background_default": false, "parallel_actuation": true } },
     { "name": "list_apps", "decodes_to": "ListAppsResult", "json": { "apps": [{ "name": "Notes", "bundle_id": "com.apple.Notes", "pid": 501, "is_frontmost": true, "launch_date": "2026-07-09T10:00:00Z" }, { "name": "ArtWall", "bundle_id": null, "pid": 502, "is_frontmost": false, "launch_date": null, "menu_bar_only": true }] } },
     { "name": "list_windows", "decodes_to": "ListWindowsResult", "json": { "windows": [{ "window_id": 4242, "title": "Untitled", "is_focused": true, "is_minimized": false }] } },
     { "name": "app_state", "decodes_to": "AppState", "json": { "text": "[0] AXWindow \"Untitled\"", "screenshot": { "url": "file:///x/shot.png", "width": 1600, "height": 1000 }, "diffed": false } },

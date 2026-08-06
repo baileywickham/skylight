@@ -26,16 +26,19 @@ or `{"id":n,"ok":false,"error":{"code":"<slug>","message":"..."}}`.
 ## Layout
 
 - `Sources/SkylightCore/` — the library (all logic, unit-tested):
-  - `IPC/` — `IPCServer` (0600 socket, single global serial actuation queue,
-    per-request timeout, SIGPIPE-safe), `LineCodec` (1 MiB line cap),
-    `RequestRouter`.
+  - `IPC/` — `IPCServer` (0600 socket, per-request timeout, SIGPIPE-safe),
+    `ActuationScheduler` (admission control: per-app keys run in parallel,
+    `.exclusive` runs alone), `RequestClassifier` (which class a request gets),
+    `LineCodec` (1 MiB line cap), `RequestRouter`.
   - `Protocol/` — `Messages` (wire envelopes, `JSONValue`, `SkyErrorCode`),
     `APITypes` (per-method input/output types).
   - `AX/` — `AXCapture` (live tree walk), `AXIdentity` (CFEqual/CFHash element
     key), `ElementIndexMap` (sticky index↔element map), `AXTreeSerializer`,
     `AXTreeDiff`, `TreeNode`.
-  - `Actuation/` — `Actuator` (all actions), `Activation`, `KeyChord` (X-keysym
-    chord → keycode+flags), `SelectionRange` (select_text math).
+  - `Actuation/` — `Actuator` (all actions), `Activation` (foreground raise +
+    background focus-without-raise), `SkyLightBridge` (dlsym'd private window
+    server symbols), `EventRecord` (the raw activation/key-window records),
+    `KeyChord` (X-keysym chord → keycode+flags), `SelectionRange`.
   - `Screenshot/` — `Screenshotter` (SCK), `AXWindowBridge` (`_AXUIElementGetWindow`).
   - `Geometry/CoordinateModel`, `AppRegistry`, `Permissions`, `Paths`, `AuditLog`.
 - `Sources/SkylightService/main.swift` — the daemon: registers all methods, owns
@@ -55,6 +58,11 @@ swift build 2>&1 | grep -i warning   # keep this EMPTY
 
 The live end-to-end smoke test is **gated**: `SKYLIGHT_SMOKE=1` runs it (needs
 TCC grants + drives TextEdit); it's skipped by default so CI stays green.
+
+`ts/live/` holds two manual checks for behavior unit tests cannot prove — that
+the private focus-without-raise records are actually honored by the window
+server, and that per-app parallelism shows up through a real socket. Run them
+after a macOS upgrade; see `ts/live/README.md`.
 
 ## Running & driving the daemon (dev)
 
@@ -105,8 +113,28 @@ one-time TCC grants from the caveats. Upgrade with `brew reinstall skylight`
   modifier events so NSMenu equivalents (Cmd+C/V) actually fire.
 - **Activation vs focus:** by default actions are activation-first (window comes
   to front). `SKYLIGHT_BACKGROUND=1` makes the daemon act **without stealing
-  focus**: AX-index actions skip activation (reliable); coordinate/keyboard use
-  `CGEventPostToPid` (best-effort — menu shortcuts to a background app may not fire).
+  focus**: AX-index actions skip activation entirely, and event-delivering
+  actions (coordinate click, keys, typing, scroll, drag) first run
+  `focusWithoutRaise` — private `SLPSPostEventRecordTo` records that make the
+  app AppKit-active and its window key **without raising it**, so menu
+  equivalents (Cmd+c) fire. Chromium additionally needs a user-activation
+  primer click at (-1,-1); Chromium still coerces synthetic right-clicks on web
+  content to left-clicks, so use `perform_secondary_action`/`AXShowMenu` there.
+  Every private symbol is dlsym-probed: when one is missing the whole path
+  no-ops back to plain `CGEventPostToPid` (check `skylight doctor` or the
+  `capabilities` method).
+- **Concurrency invariant (important):** actuation is no longer one global
+  serial queue. `ActuationScheduler` admits work by class — background actions
+  and captures are `.keyed("pid:<n>")` (different apps run **in parallel**),
+  foreground actions are `.exclusive` (run alone, since activation and the
+  cursor are global). This is only sound because every mutable capture state is
+  per-pid: `AXCapture.stateByPid` is lock-guarded, and the `AppCaptureState` /
+  `ElementIndexMap` it hands out are deliberately unsynchronized because the
+  scheduler guarantees one request at a time per app key. **If you add a method
+  that touches per-app state, add it to `RequestClassifier`** — unlisted
+  methods fall back to `.exclusive`, which is safe but serializes everything.
+  The app identifier is resolved to a pid *before* dispatch so `"Notes"` and
+  `"com.apple.Notes"` cannot get two slots for one app.
 - **Coordinate contract:** `click`/`drag` x/y are **screenshot pixels**;
   `global = px/backingScale + windowOrigin`. One `captureGeometry`/`backingScaleFactor`
   source feeds both the screenshot dimensions and the click conversion — keep it that way.
@@ -137,6 +165,9 @@ one-time TCC grants from the caveats. Upgrade with `brew reinstall skylight`
 
 ## API methods
 
+`capabilities` (TCC grants + which private SkyLight capabilities resolved +
+`background_default`/`parallel_actuation` — check this before assuming
+background mode is fully reliable on a given macOS build),
 `list_apps` (regular apps; `include_menu_bar_apps` adds accessory/LSUIElement
 apps tagged `menu_bar_only` — always resolvable by name regardless),
 `list_windows` (per-app windows with CGWindowIDs), `get_app_state`

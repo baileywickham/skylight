@@ -9,16 +9,32 @@ public enum IPCError: Error, Equatable {
 }
 
 /// Unix-domain-socket server speaking one JSON object per line.
-/// All handlers run on ONE global serial queue across every connection, so
-/// actuation from concurrent (or orphaned) clients can never interleave.
+///
+/// Requests are admitted by `ActuationScheduler`, which decides what may
+/// overlap: background work against different apps runs in parallel, while
+/// foreground work (which activates apps and moves the real cursor) runs alone.
+/// The default classifier marks EVERYTHING exclusive, so a server constructed
+/// without one behaves exactly like the original single-serial-queue design.
 public final class IPCServer {
     public typealias Handler = (Request) -> Response
 
     private let socketPath: String
     private let requestTimeout: TimeInterval
     private let handler: Handler
-    /// The global actuation queue: every request from every connection lands here.
-    private let actuationQueue = DispatchQueue(label: "com.skylight.actuation")
+    private let classify: (Request) -> RequestClass
+    private let scheduler = ActuationScheduler()
+    /// Requests dispatch concurrently and then queue for admission inside the
+    /// scheduler, so a request waiting on one app does not hold up another.
+    private let actuationQueue = DispatchQueue(label: "com.skylight.actuation",
+                                               attributes: .concurrent)
+    /// Per-request handling, so one connection's requests do not serialize on
+    /// its reader thread. Separate from `actuationQueue` because a block here
+    /// BLOCKS while waiting for its request to finish (that wait is what
+    /// enforces the per-request timeout), and it must not consume the capacity
+    /// the actuation work itself needs. Both are bounded in practice by the
+    /// number of live clients.
+    private let connectionQueue = DispatchQueue(label: "com.skylight.connection",
+                                                attributes: .concurrent)
     /// Guards `listenFD`, which is touched from start()/stop() and the accept thread.
     private let stateLock = NSLock()
     private var listenFD: Int32 = -1
@@ -28,9 +44,12 @@ public final class IPCServer {
         return listenFD >= 0
     }
 
-    public init(socketPath: String, requestTimeout: TimeInterval = 30, handler: @escaping Handler) {
+    public init(socketPath: String, requestTimeout: TimeInterval = 30,
+                classify: @escaping (Request) -> RequestClass = { _ in .exclusive },
+                handler: @escaping Handler) {
         self.socketPath = socketPath
         self.requestTimeout = requestTimeout
+        self.classify = classify
         self.handler = handler
     }
 
@@ -119,7 +138,24 @@ public final class IPCServer {
     /// is ever written to the socket, because any write could raise a fatal,
     /// process-directed SIGPIPE.
     private func serve(fd: Int32, writable: Bool) {
-        defer { close(fd) }
+        // Requests from ONE connection are handled concurrently — a single
+        // client driving several apps (`Promise.all`) sends them down one
+        // socket, so handling them in order here would serialize everything and
+        // make ActuationScheduler's per-app parallelism unobservable. What may
+        // actually overlap is still decided centrally by the scheduler; this
+        // only stops the connection itself from being the bottleneck.
+        //
+        // Responses may therefore come back out of order, which the protocol
+        // already allows: every response carries its request id and clients
+        // match on it.
+        let inFlight = DispatchGroup()
+        // Serializes writes so two responses can never interleave mid-line.
+        let writeLock = NSLock()
+        // Wait for in-flight handlers before closing: they write to this fd.
+        defer {
+            inFlight.wait()
+            close(fd)
+        }
         let codec = LineCodec()
         var buf = [UInt8](repeating: 0, count: 65536)
         while true {
@@ -130,13 +166,22 @@ public final class IPCServer {
                 lines = try codec.append(Data(buf[0..<n]))
             } catch {
                 if writable {
+                    writeLock.lock()
                     send(fd, .failure(id: 0, code: .protocolError, message: "request line exceeds \(LineCodec.maxLineBytes) bytes"))
+                    writeLock.unlock()
                 }
                 return
             }
             for line in lines where !line.isEmpty {
-                let response = handle(line: line)
-                if writable { send(fd, response) }
+                inFlight.enter()
+                connectionQueue.async { [self] in
+                    defer { inFlight.leave() }
+                    let response = handle(line: line)
+                    guard writable else { return }
+                    writeLock.lock()
+                    send(fd, response)
+                    writeLock.unlock()
+                }
             }
         }
     }
@@ -147,8 +192,11 @@ public final class IPCServer {
         }
         var response: Response?
         let done = DispatchSemaphore(value: 0)
-        actuationQueue.async { [handler] in
-            response = handler(request)
+        let requestClass = classify(request)
+        actuationQueue.async { [handler, scheduler] in
+            scheduler.run(requestClass) {
+                response = handler(request)
+            }
             done.signal()
         }
         if done.wait(timeout: .now() + requestTimeout) == .timedOut {

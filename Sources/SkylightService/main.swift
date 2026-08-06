@@ -84,6 +84,13 @@ router.register("echo") { req in
     (try? Response.success(id: req.id, result: req.params ?? JSONValue.object([:])))
         ?? .failure(id: req.id, code: .protocolError, message: "encoding echo result failed")
 }
+router.register("capabilities", handle("capabilities", EmptyParams.self) { _ in
+    CapabilitiesResult(version: SkylightVersion.current,
+                       permissions: Permissions.status(),
+                       skylight: SkyLightBridge.capabilities(),
+                       background_default: background,
+                       parallel_actuation: true)
+})
 router.register("list_apps", handle("list_apps", ListAppsInput.self) { input in
     registry.listApps(includeMenuBarApps: input.include_menu_bar_apps ?? false)
 })
@@ -144,7 +151,29 @@ for line in Permissions.instructions(for: status) {
     FileHandle.standardError.write(Data("warning: \(line)\n".utf8))
 }
 
-let server = IPCServer(socketPath: SkylightPaths.socketPath, handler: router.route)
+/// The subset of any request's params needed to schedule it. Decoded
+/// leniently — every field is optional — because this runs for EVERY method,
+/// including ones that name no app. Never used to drive an action.
+struct SchedulingParams: Decodable {
+    let app: String?
+    let background: Bool?
+}
+
+/// Picks the scheduling key for a request: background work is keyed per app so
+/// different apps proceed in parallel; foreground work is exclusive. The app
+/// identifier is resolved to a pid HERE so that "Notes" and "com.apple.Notes"
+/// cannot be handed two separate slots for the same app.
+func classifyRequest(_ request: Request) -> RequestClass {
+    let params = try? request.decodeParams(SchedulingParams.self)
+    let appKey = params?.app
+        .flatMap { try? registry.resolve($0) }
+        .map { "pid:\($0.processIdentifier)" }
+    return RequestClassifier.classify(method: request.method, appKey: appKey,
+                                      background: actuator.effectiveBackground(params?.background))
+}
+
+let server = IPCServer(socketPath: SkylightPaths.socketPath,
+                       classify: classifyRequest, handler: router.route)
 do {
     try server.start()
     let mode = background ? " (background mode: actions will not steal focus)" : ""
