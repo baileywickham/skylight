@@ -120,7 +120,27 @@ func writeApprovals(_ cfg: ApprovalsConfig, to url: URL) {
     }
 }
 
+/// `skylight install-app <staged.app> <destination.app>` — used by
+/// install-launchagent.sh. Kept out of `usage` because it is an installer
+/// implementation detail, not something to run by hand.
+func installApp() {
+    let args = Array(CommandLine.arguments.dropFirst(2))
+    guard args.count == 2 else {
+        print("usage: skylight install-app <staged-bundle> <destination-bundle>")
+        exit(2)
+    }
+    do {
+        try AtomicInstall.install(source: URL(fileURLWithPath: args[0]),
+                                  destination: URL(fileURLWithPath: args[1]))
+        print("installed \(args[1])")
+    } catch {
+        print("error: \(error)")
+        exit(1)
+    }
+}
+
 switch CommandLine.arguments.dropFirst().first {
+case "install-app": installApp()
 case "doctor": doctor()
 case "start": start()
 case "usage": usage()
