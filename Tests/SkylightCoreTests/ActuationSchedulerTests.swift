@@ -108,7 +108,13 @@ final class ActuationSchedulerTests: XCTestCase {
             scheduler.run(.exclusive) {}
         }
         XCTAssertEqual(exclusiveQueued.wait(timeout: .now() + 2), .success)
-        usleep(100_000) // let the exclusive request register as waiting
+        // Poll for the exclusive request to actually register as waiting rather
+        // than sleeping a fixed interval and assuming it got there: under CPU
+        // load a fixed sleep can expire first, flipping the negative assertion
+        // below into a false failure.
+        let deadline = Date().addingTimeInterval(2)
+        while scheduler.exclusiveWaitingCount == 0, Date() < deadline { usleep(1_000) }
+        XCTAssertEqual(scheduler.exclusiveWaitingCount, 1, "exclusive request never queued")
 
         // A different key would normally be admitted immediately.
         runInBackground {
@@ -147,8 +153,12 @@ final class ActuationSchedulerTests: XCTestCase {
                     counter.lock(); live += 1; peak = max(peak, live); counter.unlock()
                     usleep(20_000)
                     counter.lock(); live -= 1; counter.unlock()
-                    done.fulfill()
                 }
+                // Fulfilled AFTER run() returns, not inside the block: the key is
+                // released on the way out, so signalling from within would let
+                // wait() return while the last slot is still held and make the
+                // activeKeyCount assertion below racy (it flaked under CPU load).
+                done.fulfill()
             }
         }
         wait(for: [done], timeout: 10)

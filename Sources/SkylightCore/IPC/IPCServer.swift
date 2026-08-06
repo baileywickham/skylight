@@ -68,7 +68,12 @@ public final class IPCServer {
         }
         guard bound == 0 else { close(fd); throw IPCError.bindFailed(errno) }
         chmod(socketPath, 0o600) // owner-only: the socket grants full input control
-        guard listen(fd, 16) == 0 else { close(fd); throw IPCError.listenFailed(errno) }
+        // Backlog well above the number of clients ever expected: a burst of
+        // connects that overflows it is refused outright (ECONNREFUSED), and a
+        // parallel agent fleet opening several sockets at once is now a normal
+        // pattern. 16 was demonstrably too small — under CPU load the accept
+        // loop fell behind a 20-connect burst and connections were refused.
+        guard listen(fd, SOMAXCONN) == 0 else { close(fd); throw IPCError.listenFailed(errno) }
 
         stateLock.lock()
         listenFD = fd

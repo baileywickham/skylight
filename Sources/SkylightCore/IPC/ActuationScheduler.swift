@@ -73,4 +73,13 @@ public final class ActuationScheduler {
         condition.lock(); defer { condition.unlock() }
         return activeKeys.count
     }
+
+    /// Test/introspection hook: exclusive requests waiting for admission. Lets a
+    /// test wait for "the exclusive request has registered" instead of sleeping
+    /// and hoping — a fixed sleep is exactly what makes such tests flake on a
+    /// loaded machine.
+    public var exclusiveWaitingCount: Int {
+        condition.lock(); defer { condition.unlock() }
+        return exclusiveWaiting
+    }
 }
