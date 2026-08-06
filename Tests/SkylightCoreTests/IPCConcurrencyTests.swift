@@ -33,12 +33,30 @@ final class IPCConcurrencyTests: XCTestCase {
         return fd
     }
 
-    /// Server whose handler blocks for `holdMs`, so overlap is measurable.
-    private func makeServer(path: String, holdMs: UInt32,
+    /// Tracks how many handlers were ever in flight at once. Asserting on this
+    /// instead of on elapsed wall-clock keeps the tests immune to machine load:
+    /// a slow CI box changes durations but never turns overlap into no-overlap.
+    private final class ConcurrencyProbe {
+        private let lock = NSLock()
+        private var live = 0
+        private(set) var peak = 0
+        func enter() {
+            lock.lock(); live += 1; peak = max(peak, live); lock.unlock()
+        }
+        func leave() {
+            lock.lock(); live -= 1; lock.unlock()
+        }
+    }
+
+    /// Server whose handler holds for `holdMs` — long enough that genuinely
+    /// concurrent requests are guaranteed to be in flight together.
+    private func makeServer(path: String, holdMs: UInt32, probe: ConcurrencyProbe,
                             classify: @escaping (Request) -> RequestClass) -> IPCServer {
         let router = RequestRouter()
         router.register("work") { req in
+            probe.enter()
             usleep(holdMs * 1000)
+            probe.leave()
             return (try? Response.success(id: req.id, result: ["done": true]))
                 ?? .failure(id: req.id, code: .protocolError, message: "encode")
         }
@@ -70,7 +88,8 @@ final class IPCConcurrencyTests: XCTestCase {
     /// Two requests for different apps, sent down ONE connection, must overlap.
     func testDifferentKeysOverlapOnOneConnection() throws {
         let path = tempSocketPath()
-        let server = makeServer(path: path, holdMs: 400) { req in
+        let probe = ConcurrencyProbe()
+        let server = makeServer(path: path, holdMs: 300, probe: probe) { req in
             let app = (try? req.decodeParams([String: String].self))?["app"] ?? "?"
             return .keyed(app)
         }
@@ -79,22 +98,21 @@ final class IPCConcurrencyTests: XCTestCase {
         let fd = connect(path)
         defer { close(fd) }
 
-        let start = Date()
         send(fd, id: 1, app: "Notes")
         send(fd, id: 2, app: "Safari")
         let responses = readResponses(fd, count: 2)
-        let elapsed = Date().timeIntervalSince(start)
 
         XCTAssertEqual(responses.count, 2)
-        XCTAssertLessThan(elapsed, 0.7,
-                          "two 400ms requests for different apps should overlap, not queue (took \(elapsed)s)")
+        XCTAssertEqual(probe.peak, 2,
+                       "requests for different apps must be in flight together, not queued")
     }
 
     /// Same app must still serialize — the invariant that makes per-app state
     /// safe without locking it.
     func testSameKeySerializesOnOneConnection() throws {
         let path = tempSocketPath()
-        let server = makeServer(path: path, holdMs: 300) { req in
+        let probe = ConcurrencyProbe()
+        let server = makeServer(path: path, holdMs: 300, probe: probe) { req in
             let app = (try? req.decodeParams([String: String].self))?["app"] ?? "?"
             return .keyed(app)
         }
@@ -103,24 +121,25 @@ final class IPCConcurrencyTests: XCTestCase {
         let fd = connect(path)
         defer { close(fd) }
 
-        let start = Date()
         send(fd, id: 1, app: "Notes")
         send(fd, id: 2, app: "Notes")
         let responses = readResponses(fd, count: 2)
-        let elapsed = Date().timeIntervalSince(start)
 
         XCTAssertEqual(responses.count, 2)
-        XCTAssertGreaterThan(elapsed, 0.55,
-                             "two requests for one app must not overlap (took \(elapsed)s)")
+        XCTAssertEqual(probe.peak, 1,
+                       "two requests for one app must never be in flight together")
     }
 
     /// The default classifier keeps the original fully-serialized behavior, so
     /// a server built without one is unchanged.
     func testDefaultClassifierSerializesEverything() throws {
         let path = tempSocketPath()
+        let probe = ConcurrencyProbe()
         let router = RequestRouter()
         router.register("work") { req in
+            probe.enter()
             usleep(300_000)
+            probe.leave()
             return (try? Response.success(id: req.id, result: ["done": true]))
                 ?? .failure(id: req.id, code: .protocolError, message: "encode")
         }
@@ -130,19 +149,17 @@ final class IPCConcurrencyTests: XCTestCase {
         let fd = connect(path)
         defer { close(fd) }
 
-        let start = Date()
         send(fd, id: 1, app: "Notes")
         send(fd, id: 2, app: "Safari")
         _ = readResponses(fd, count: 2)
-        XCTAssertGreaterThan(Date().timeIntervalSince(start), 0.55,
-                             "without a classifier every request is exclusive")
+        XCTAssertEqual(probe.peak, 1, "without a classifier every request is exclusive")
     }
 
     /// Concurrent handling must not corrupt the framing: every response is a
     /// complete, parseable line carrying its own id.
     func testResponsesStayWellFormedUnderConcurrency() throws {
         let path = tempSocketPath()
-        let server = makeServer(path: path, holdMs: 50) { req in
+        let server = makeServer(path: path, holdMs: 50, probe: ConcurrencyProbe()) { req in
             let app = (try? req.decodeParams([String: String].self))?["app"] ?? "?"
             return .keyed(app)
         }

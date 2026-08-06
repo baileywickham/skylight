@@ -146,6 +146,13 @@ router.register("select_text", actuation("select_text", SelectTextInput.self,
     target: { "\($0.app)[\($0.element_index)]" }, actuator.selectText))
 
 // Startup permission report: precise instructions if grants are missing.
+// Ask for Screen Recording FIRST when it is missing: the preflight the rest of
+// the daemon uses never prompts, so without this the app never appears in the
+// Screen & System Audio Recording list and the instruction below is impossible
+// to follow. Re-checked afterwards so the report reflects a grant just given.
+if !Permissions.status().screen_recording {
+    Permissions.requestScreenRecording()
+}
 let status = Permissions.status()
 for line in Permissions.instructions(for: status) {
     FileHandle.standardError.write(Data("warning: \(line)\n".utf8))

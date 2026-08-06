@@ -19,6 +19,24 @@ public enum Permissions {
             screen_recording: CGPreflightScreenCaptureAccess())
     }
 
+    /// Asks macOS for Screen Recording. Returns whether it is granted.
+    ///
+    /// This exists because `CGPreflightScreenCaptureAccess` only CHECKS, and
+    /// `Screenshotter` refuses to capture when that check fails — so without an
+    /// explicit request the daemon never touches ScreenCaptureKit, macOS is
+    /// never asked, no prompt appears, and the app never gets listed under
+    /// Screen & System Audio Recording. The user is then told to "enable
+    /// SkylightService" in a list that does not contain it. Requesting once at
+    /// startup breaks that deadlock.
+    ///
+    /// Safe to call when already granted (returns true, shows nothing) and when
+    /// the user has previously denied (macOS declines to re-prompt; they must
+    /// use the pane's Add button).
+    @discardableResult
+    public static func requestScreenRecording() -> Bool {
+        CGRequestScreenCaptureAccess()
+    }
+
     /// One precise line per missing grant, naming the exact System Settings pane.
     public static func instructions(for status: PermissionStatus) -> [String] {
         var lines: [String] = []
