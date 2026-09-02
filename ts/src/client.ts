@@ -3,11 +3,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type {
-  ActionResult, AppState, CapabilitiesResult, ClickInput, DragInput, GetAppStateInput,
-  ListAppsInput, ListAppsResult,
+  ActionResult, AppState, BringToActiveSpaceInput, BringToActiveSpaceResult, CapabilitiesResult,
+  ClickInput, ClipboardResult, DisplayScreenshot, DragInput, GetAppStateInput,
+  ListAppsInput, ListAppsResult, ListDisplaysResult,
   ListWindowsInput, ListWindowsResult,
-  PerformSecondaryActionInput, PressKeyInput, ScrollInput, SelectTextInput,
-  SetValueInput, TypeTextInput,
+  PerformSecondaryActionInput, PressKeyInput, ScreenshotInput, ScrollInput, SelectTextInput,
+  SetValueInput, TypeTextInput, WriteClipboardInput, ZoomInput,
 } from "./types.js";
 
 // NOTE: shots_dir is intentionally NOT part of SkyConfig: the client never
@@ -186,4 +187,17 @@ export class SkyClient {
     return this.call("perform_secondary_action", input);
   }
   select_text(input: SelectTextInput): Promise<ActionResult> { return this.call("select_text", input); }
+
+  /** Attached displays; ids feed screenshot/zoom/click/drag display_id. */
+  list_displays(): Promise<ListDisplaysResult> { return this.call("list_displays", {}); }
+  /** Whole-display capture (default 1 px per point). Pixel coordinates from it go to click/drag with display_id. */
+  screenshot(input?: ScreenshotInput): Promise<DisplayScreenshot> { return this.call("screenshot", input ?? {}); }
+  /** Native-resolution crop of a region of the latest screenshot; read-only (does not change click geometry). */
+  zoom(input: ZoomInput): Promise<DisplayScreenshot> { return this.call("zoom", input); }
+  read_clipboard(): Promise<ClipboardResult> { return this.call("read_clipboard", {}); }
+  write_clipboard(input: WriteClipboardInput): Promise<ActionResult> { return this.call("write_clipboard", input); }
+  /** Move a window onto the active Space without switching Spaces. */
+  bring_to_active_space(input: BringToActiveSpaceInput): Promise<BringToActiveSpaceResult> {
+    return this.call("bring_to_active_space", input);
+  }
 }

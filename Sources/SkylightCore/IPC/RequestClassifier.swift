@@ -13,10 +13,20 @@ import Foundation
 public enum RequestClassifier {
     /// Methods that touch neither app state nor input, so they never queue
     /// behind actuation.
-    public static let metaMethods: Set<String> = ["ping", "echo", "list_apps", "capabilities"]
+    public static let metaMethods: Set<String> = [
+        "ping", "echo", "list_apps", "capabilities", "list_displays", "read_clipboard", "write_clipboard",
+    ]
 
     /// Shared key for the meta methods above.
     public static let metaKey = "$meta"
+
+    /// Whole-display captures: no app state, but they write the per-display
+    /// click geometry, so they serialize with each other and never with an
+    /// app's own work.
+    public static let displayMethods: Set<String> = ["screenshot", "zoom"]
+
+    /// Shared key for the display methods above.
+    public static let displayKey = "$display"
 
     /// Read-only per-app methods: capture never activates anything, but it does
     /// mutate that app's index map and diff baseline, so it serializes against
@@ -28,7 +38,7 @@ public enum RequestClassifier {
     /// alone instead of silently racing.
     public static let actionMethods: Set<String> = [
         "click", "press_key", "type_text", "scroll", "set_value", "drag",
-        "perform_secondary_action", "select_text",
+        "perform_secondary_action", "select_text", "bring_to_active_space",
     ]
 
     /// - Parameters:
@@ -39,6 +49,7 @@ public enum RequestClassifier {
     ///   - background: the effective background flag for this request.
     public static func classify(method: String, appKey: String?, background: Bool) -> RequestClass {
         if metaMethods.contains(method) { return .keyed(metaKey) }
+        if displayMethods.contains(method) { return .keyed(displayKey) }
         // No resolvable target: fall back to exclusive. Such a request is
         // about to fail with app_not_found anyway, and guessing a key for it
         // could collide with a real app's slot.

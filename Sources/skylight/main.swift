@@ -15,6 +15,7 @@ func doctor() {
         print("     symbols skylight uses to activate an app without raising it.")
     }
     print("  trusted events:   \(caps.trusted_events ? "enabled" : "off (experimental; SKYLIGHT_TRUSTED_EVENTS=1)")")
+    print("  spaces:           \(caps.space_management ? "available" : "UNAVAILABLE (bring_to_active_space disabled)")")
     let live = Permissions.socketIsLive(at: SkylightPaths.socketPath)
     print("  socket:           \(live ? "live" : "not listening") at \(SkylightPaths.socketPath)")
     if !live { print("  -> run 'skylight start'") }
@@ -67,6 +68,13 @@ func usage() {
 
     Type declarations: ts/sky.d.ts. Config via SKYLIGHT_CONFIG_PATH
     ({ socket_path, post_action_sleep_ms, shots_dir }).
+
+    Pixel path: sky.screenshot() (whole display), sky.zoom({x,y,width,height}),
+    sky.click({x, y, display_id}); clipboard: read_clipboard/write_clipboard;
+    Spaces: bring_to_active_space({app, window_id}).
+
+    MCP: `skylight-run --mcp` serves all of this as tools over stdio
+    (claude mcp add --scope user skylight -- skylight-run --mcp).
 
     Background mode: pass background: true on any action to act without stealing
     focus (reliable for element_index actions; best-effort for coordinate clicks

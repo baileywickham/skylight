@@ -19,6 +19,13 @@ final class ActuatorTests: XCTestCase {
         }
     }
 
+    private func assertThrowsCode(_ code: SkyErrorCode, _ body: @autoclosure () throws -> BringToActiveSpaceResult,
+                                  file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertThrowsError(try body(), file: file, line: line) { error in
+            XCTAssertEqual((error as? SkyServiceError)?.code, code, file: file, line: line)
+        }
+    }
+
     func testPauseSentinelHaltsAllActuation() throws {
         let actuator = try makeActuator(paused: true)
         assertThrowsCode(.actuationPaused, try actuator.click(ClickInput(app: "Finder", element_index: 0)))
@@ -44,6 +51,30 @@ final class ActuatorTests: XCTestCase {
     func testCoordinateClickWithoutPriorCaptureIsInvalid() throws {
         let actuator = try makeActuator()
         assertThrowsCode(.invalidParams, try actuator.click(ClickInput(app: "Finder", x: 10, y: 10)))
+    }
+
+    func testDisplayClickWithoutPriorScreenshotIsInvalid() throws {
+        let actuator = try makeActuator()
+        assertThrowsCode(.invalidParams, try actuator.click(ClickInput(x: 10, y: 10, display_id: 1)))
+        assertThrowsCode(.invalidParams, try actuator.drag(DragInput(from_x: 1, from_y: 1, to_x: 2, to_y: 2, display_id: 1)))
+    }
+
+    /// Only display-space coordinates may omit the app; index and window
+    /// coordinates need one to resolve the element map / geometry.
+    func testAppIsRequiredUnlessDisplayCoordinates() throws {
+        let actuator = try makeActuator()
+        assertThrowsCode(.invalidParams, try actuator.click(ClickInput(element_index: 0)))
+        assertThrowsCode(.invalidParams, try actuator.click(ClickInput(x: 1, y: 1)))
+        assertThrowsCode(.invalidParams, try actuator.drag(DragInput(from_x: 1, from_y: 1, to_x: 2, to_y: 2)))
+    }
+
+    func testBringToActiveSpaceUnknownAppOrWindow() throws {
+        let actuator = try makeActuator()
+        guard SkyLightBridge.canManageSpaces else {
+            assertThrowsCode(.notImplemented, try actuator.bringToActiveSpace(BringToActiveSpaceInput(app: "Finder")))
+            return
+        }
+        assertThrowsCode(.appNotFound, try actuator.bringToActiveSpace(BringToActiveSpaceInput(app: "Definitely Not An App 9000")))
     }
 
     func testBadMouseButtonAndDirectionAreInvalidParams() throws {

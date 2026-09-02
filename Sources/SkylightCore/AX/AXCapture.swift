@@ -354,11 +354,13 @@ public final class AXCapture {
         return wins.map { w in
             let minimized: NSNumber? = axAttribute(w, kAXMinimizedAttribute)
             let title: String? = axAttribute(w, kAXTitleAttribute)
+            let windowID = axWindowID(of: w)
             return WindowListing(element: w, info: WindowInfo(
-                window_id: axWindowID(of: w).map { Int($0) },
+                window_id: windowID.map { Int($0) },
                 title: title.map { sanitizeAXText($0) },
                 is_focused: focused.map { CFEqual($0, w) } ?? false,
-                is_minimized: minimized?.boolValue ?? false))
+                is_minimized: minimized?.boolValue ?? false,
+                is_on_active_space: windowID.flatMap { SkyLightBridge.isOnActiveSpace(windowID: $0) }))
         }
     }
 

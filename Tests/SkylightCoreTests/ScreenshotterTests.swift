@@ -44,6 +44,47 @@ final class ScreenshotterTests: XCTestCase {
         XCTAssertEqual(value, 42)
     }
 
+    // MARK: - Display capture policy (pure)
+
+    func testCaptureScaleKeepsPreferredWhenItFits() {
+        XCTAssertEqual(captureScale(pointSize: CGSize(width: 800, height: 600), preferred: 2.0, maxDimension: 1600), 2.0)
+        XCTAssertEqual(captureScale(pointSize: CGSize(width: 800, height: 600), preferred: 2.0, maxDimension: nil), 2.0)
+        XCTAssertEqual(captureScale(pointSize: CGSize(width: 800, height: 600), preferred: 1.0, maxDimension: 0), 1.0)
+    }
+
+    func testCaptureScaleShrinksLongestSideToFit() {
+        // 1728x1117 points at 1x with a 1568 cap: 1568/1728.
+        let s = captureScale(pointSize: CGSize(width: 1728, height: 1117), preferred: 1.0, maxDimension: 1568)
+        XCTAssertEqual(s, 1568.0 / 1728.0, accuracy: 1e-9)
+        // Portrait: the height is the longest side.
+        let p = captureScale(pointSize: CGSize(width: 500, height: 3000), preferred: 2.0, maxDimension: 1500)
+        XCTAssertEqual(p, 0.5, accuracy: 1e-9)
+    }
+
+    func testDisplayGlobalPointUsesOriginPlusPixelsOverScale() {
+        let g = CaptureGeometry(windowOriginX: 1728, windowOriginY: -200, scale: 0.5)
+        let pt = displayGlobalPoint(x: 100, y: 50, geometry: g)
+        XCTAssertEqual(pt.x, 1728 + 200)
+        XCTAssertEqual(pt.y, -200 + 100)
+    }
+
+    func testDisplayGeometryStoreIsPerDisplay() {
+        let store = DisplayGeometryStore()
+        XCTAssertNil(store.latest(forDisplay: 1))
+        store.commit(CaptureGeometry(windowOriginX: 0, windowOriginY: 0, scale: 1), forDisplay: 1)
+        store.commit(CaptureGeometry(windowOriginX: 10, windowOriginY: 0, scale: 2), forDisplay: 2)
+        XCTAssertEqual(store.latest(forDisplay: 1)?.scale, 1)
+        XCTAssertEqual(store.latest(forDisplay: 2)?.windowOriginX, 10)
+        XCTAssertNil(store.latest(forDisplay: 3))
+    }
+
+    func testListDisplaysReportsTheMainDisplay() {
+        let displays = listDisplays().displays
+        XCTAssertFalse(displays.isEmpty)
+        XCTAssertEqual(displays.filter(\.is_main).count, 1)
+        XCTAssertTrue(displays.allSatisfy { $0.width > 0 && $0.height > 0 && $0.backing_scale > 0 })
+    }
+
     func testFileURLWithSpaceInPath() throws {
         let dirName = "skylight test dir"
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(dirName)

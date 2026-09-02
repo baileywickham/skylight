@@ -1,6 +1,6 @@
 {
   "name": "@skylight/sky",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "main": "src/index.ts",
@@ -14,5 +14,9 @@
     "tsx": "^4.23.9",
     "typescript": "^5.6.0",
     "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.5.4"
   }
 }

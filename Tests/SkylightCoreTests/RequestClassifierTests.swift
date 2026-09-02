@@ -7,7 +7,7 @@ final class RequestClassifierTests: XCTestCase {
     }
 
     func testMetaMethodsShareOneKeyAndNeverBlockOnActuation() {
-        for method in ["ping", "echo", "list_apps", "capabilities"] {
+        for method in ["ping", "echo", "list_apps", "capabilities", "list_displays", "read_clipboard", "write_clipboard"] {
             XCTAssertEqual(classify(method, nil, background: false), .keyed("$meta"), method)
             XCTAssertEqual(classify(method, "pid:42", background: true), .keyed("$meta"), method)
         }
@@ -36,6 +36,22 @@ final class RequestClassifierTests: XCTestCase {
                        "perform_secondary_action", "select_text"] {
             XCTAssertEqual(classify(method, "pid:42", background: false), .exclusive, method)
         }
+    }
+
+    /// Display captures share one key: they never touch an app's index map,
+    /// but they do write the per-display click geometry.
+    func testDisplayMethodsShareTheDisplayKeyInBothModes() {
+        for method in ["screenshot", "zoom"] {
+            XCTAssertEqual(classify(method, nil, background: false), .keyed("$display"), method)
+            XCTAssertEqual(classify(method, "pid:42", background: true), .keyed("$display"), method)
+        }
+    }
+
+    /// Moving a window between Spaces is an action: per-app in background
+    /// mode, alone otherwise.
+    func testBringToActiveSpaceIsAnAction() {
+        XCTAssertEqual(classify("bring_to_active_space", "pid:42", background: true), .keyed("pid:42"))
+        XCTAssertEqual(classify("bring_to_active_space", "pid:42", background: false), .exclusive)
     }
 
     func testDifferentAppsGetDifferentKeys() {

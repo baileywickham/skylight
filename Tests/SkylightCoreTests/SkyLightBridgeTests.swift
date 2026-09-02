@@ -11,7 +11,7 @@ final class SkyLightBridgeTests: XCTestCase {
     }
 
     func testCapabilitiesRoundTripThroughJSON() throws {
-        let caps = SkyLightCapabilities(focus_without_raise: true, trusted_events: false)
+        let caps = SkyLightCapabilities(focus_without_raise: true, trusted_events: false, space_management: true)
         let data = try JSONEncoder().encode(caps)
         XCTAssertEqual(try JSONDecoder().decode(SkyLightCapabilities.self, from: data), caps)
     }
@@ -24,6 +24,16 @@ final class SkyLightBridgeTests: XCTestCase {
             throw XCTSkip("SKYLIGHT_TRUSTED_EVENTS is set in this environment")
         }
         XCTAssertFalse(SkyLightBridge.capabilities().trusted_events)
+    }
+
+    /// Spaces queries must never trap whatever this host exposes; an unknown
+    /// window id yields nil/empty, not a crash.
+    func testSpaceQueriesAreSafeOnUnknownWindow() {
+        _ = SkyLightBridge.activeSpace()
+        let spaces = SkyLightBridge.spaces(forWindow: 0)
+        XCTAssertTrue(spaces == nil || spaces!.isEmpty)
+        XCTAssertNil(SkyLightBridge.isOnActiveSpace(windowID: 0))
+        XCTAssertEqual(SkyLightBridge.capabilities().space_management, SkyLightBridge.canManageSpaces)
     }
 
     func testPsnEqualityComparesBothHalves() {

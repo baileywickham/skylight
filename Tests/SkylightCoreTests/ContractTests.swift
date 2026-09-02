@@ -34,6 +34,11 @@ final class ContractTests: XCTestCase {
             case "drag": _ = try request.decodeParams(DragInput.self)
             case "perform_secondary_action": _ = try request.decodeParams(PerformSecondaryActionInput.self)
             case "select_text": _ = try request.decodeParams(SelectTextInput.self)
+            case "list_displays", "read_clipboard": break // no params
+            case "screenshot": _ = try request.decodeParams(ScreenshotInput.self)
+            case "zoom": _ = try request.decodeParams(ZoomInput.self)
+            case "write_clipboard": _ = try request.decodeParams(WriteClipboardInput.self)
+            case "bring_to_active_space": _ = try request.decodeParams(BringToActiveSpaceInput.self)
             default: XCTFail("unhandled method \(req.method)")
             }
         }
@@ -48,6 +53,10 @@ final class ContractTests: XCTestCase {
             case "ListWindowsResult": _ = try JSONDecoder().decode(ListWindowsResult.self, from: data)
             case "AppState": _ = try JSONDecoder().decode(AppState.self, from: data)
             case "ActionResult": _ = try JSONDecoder().decode(ActionResult.self, from: data)
+            case "ListDisplaysResult": _ = try JSONDecoder().decode(ListDisplaysResult.self, from: data)
+            case "DisplayScreenshotResult": _ = try JSONDecoder().decode(DisplayScreenshotResult.self, from: data)
+            case "ClipboardResult": _ = try JSONDecoder().decode(ClipboardResult.self, from: data)
+            case "BringToActiveSpaceResult": _ = try JSONDecoder().decode(BringToActiveSpaceResult.self, from: data)
             default: XCTFail("unhandled result type \(resp.decodes_to)")
             }
         }

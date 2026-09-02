@@ -5,7 +5,9 @@ description: Use when asked to see, read, click, type into, or otherwise drive a
 
 # Skylight — driving native macOS apps
 
-Skylight (repo: `~/workspace/skylight`) is a local computer-use daemon: it captures an app window's accessibility (AX) tree + screenshot, and performs clicks/keys/typing on it. `skylight-run` (on PATH) wraps everything — daemon startup, module-format gotchas — so drivers work from any directory.
+Skylight (repo: `~/workspace/skylight`) is a local computer-use daemon: it captures an app window's accessibility (AX) tree + screenshot, and performs clicks/keys/typing on it. It also does the pixel-only path (whole-display screenshot, zoom, click at screen coordinates), clipboard, and Spaces. `skylight-run` (on PATH) wraps everything — daemon startup, module-format gotchas — so drivers work from any directory.
+
+**If the `mcp__skylight__*` tools are available, use them** — same methods as below, screenshots arrive as images, no driver files. Drop to `skylight-run` drivers only for batch/parallel work that is awkward as one tool call at a time.
 
 ## Quick start
 
@@ -40,17 +42,34 @@ All methods take `app` (app name, e.g. `"Finder"`). Full types: `~/workspace/sky
 | `list_apps` | `include_menu_bar_apps?` (also list accessory/LSUIElement apps, tagged `menu_bar_only`) |
 | `list_windows` | — (windows with `window_id`, `title`, `is_focused`) |
 | `get_app_state` | `disableDiff?`, `window_id?` (from `list_windows`), `include_data_url?` |
-| `click` | `element_index` OR `x`,`y` (screenshot px); `mouse_button?`, `click_count?` |
-| `press_key` | `keys`: X-keysym chord, e.g. `"Cmd+s"`, `"Ctrl+Shift+t"`, `"Return"` |
-| `type_text` | `text` |
+| `click` | `element_index` OR `x`,`y` (screenshot px); `display_id?` makes x/y pixels of the latest `screenshot` (then `app` is optional — hit-tested); `mouse_button?`, `click_count?` |
+| `press_key` | `keys`: X-keysym chord, e.g. `"Cmd+s"`, `"Ctrl+Shift+t"`, `"Return"`; `app` optional (frontmost) |
+| `type_text` | `text`; `app` optional (frontmost) |
 | `scroll` | `element_index`, `direction` (up/down/left/right), `pages` |
 | `set_value` | `element_index`, `value` |
-| `drag` | `from_x`,`from_y`,`to_x`,`to_y` (screenshot px) |
+| `drag` | `from_x`,`from_y`,`to_x`,`to_y` (screenshot px); `display_id?` as for click |
 | `perform_secondary_action` | `element_index`, `action` (e.g. `"AXShowMenu"`) |
 | `select_text` | `element_index`, `text`, `prefix?`, `suffix?`, `selection_type` |
-| `capabilities` | — (TCC grants, private-symbol availability, `parallel_actuation`) |
+| `capabilities` | — (TCC grants, private-symbol availability, `parallel_actuation`, `space_management`) |
+| `list_displays` | — (`display_id`, size in points, origin, `backing_scale`, `is_main`) |
+| `screenshot` | `display_id?`, `max_dimension?`, `show_cursor?`, `include_data_url?` — whole display, 1 px/pt by default |
+| `zoom` | `display_id?`, `x`,`y`,`width`,`height` (px of the latest screenshot), `max_dimension?` — native-res crop, read-only |
+| `read_clipboard` / `write_clipboard` | — / `text` |
+| `bring_to_active_space` | `app`, `window_id?` — move a window to the current Space without switching |
 
 Every action (`click`, `press_key`, `type_text`, `scroll`, `set_value`, `drag`, `perform_secondary_action`, `select_text`) also accepts `background?: true`.
+
+## Pixel path (no AX tree, or the whole desktop)
+
+```bash
+skylight-run -e '
+const shot = await sky.screenshot();            // 1 px per point; view shot.url with Read
+const z = await sky.zoom({ x: 600, y: 300, width: 400, height: 200 });  // native-res detail
+await sky.click({ x: 640, y: 350, display_id: shot.display_id });     // app hit-tested at the point
+await sky.write_clipboard({ text: "long text" }); await sky.press_key({ keys: "Cmd+v" });'
+```
+
+Coordinates are always pixels of the most recent image of that target (per-app window capture, or per-display `screenshot`); `zoom` never changes them. `get_app_state` and `screenshot` take `max_dimension` to cap the long side.
 
 ## Per-app notes
 

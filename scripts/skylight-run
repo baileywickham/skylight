@@ -13,6 +13,8 @@
 #                                   and closed for you, top-level await OK
 #   skylight-run --status           daemon / socket / permission report
 #   skylight-run --stop             stop the daemon (SIGTERM; unlinks socket)
+#   skylight-run --mcp              serve Skylight as an MCP server on stdio
+#                                   (claude mcp add skylight -- skylight-run --mcp)
 #
 # SKYLIGHT_BACKGROUND=1 skylight-run ...  starts the daemon (if not already
 # running) in no-focus-steal mode. Only applies at daemon start; --stop first
@@ -104,6 +106,13 @@ case "${1:-}" in
   --stop)
     pkill -TERM -f SkylightService 2>/dev/null && echo "stopped" || echo "not running"
     exit 0
+    ;;
+  --mcp)
+    # stdio is the MCP transport: nothing above may write to stdout (all the
+    # helpers here log to stderr), and the daemon must be up before the first
+    # tool call rather than lazily inside one.
+    ensure_daemon
+    exec "$TSX" "$TS_DIR/src/mcp.ts"
     ;;
   -e)
     [ -n "${2:-}" ] || die "usage: skylight-run -e '<code>'"

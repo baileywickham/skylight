@@ -26,6 +26,7 @@ or `{"id":n,"ok":false,"error":{"code":"<slug>","message":"..."}}`.
 ## Layout
 
 - `Sources/SkylightCore/` — the library (all logic, unit-tested):
+  - `Clipboard.swift` — general pasteboard read/write (main-queue hop).
   - `IPC/` — `IPCServer` (0600 socket, per-request timeout, SIGPIPE-safe),
     `ActuationScheduler` (admission control: per-app keys run in parallel,
     `.exclusive` runs alone), `RequestClassifier` (which class a request gets),
@@ -39,13 +40,18 @@ or `{"id":n,"ok":false,"error":{"code":"<slug>","message":"..."}}`.
     background focus-without-raise), `SkyLightBridge` (dlsym'd private window
     server symbols), `EventRecord` (the raw activation/key-window records),
     `KeyChord` (X-keysym chord → keycode+flags), `SelectionRange`.
-  - `Screenshot/` — `Screenshotter` (SCK), `AXWindowBridge` (`_AXUIElementGetWindow`).
+  - `Screenshot/` — `Screenshotter` (SCK: window crops, whole-display
+    `captureDisplay`, region `zoom`, `max_dimension` downscaling),
+    `DisplayGeometryStore` (per-display click geometry), `AXWindowBridge`
+    (`_AXUIElementGetWindow`).
   - `Geometry/CoordinateModel`, `AppRegistry`, `Permissions`, `Paths`, `AuditLog`.
 - `Sources/SkylightService/main.swift` — the daemon: registers all methods, owns
   the run loop, audit log, kill switch.
 - `Sources/skylight/main.swift` — the `skylight` CLI (`doctor`, `start`, usage).
 - `ts/` — the `@skylight/sky` client (`src/client.ts`, `src/types.ts`,
-  `sky.d.ts`) + tests. `packaging/`, `scripts/` — .app + LaunchAgent + signing.
+  `sky.d.ts`) + tests, and `src/mcp.ts`, the MCP server (`skylight-run --mcp`)
+  that exposes every method as a tool. `packaging/`, `scripts/` — .app +
+  LaunchAgent + signing.
 
 ## Build / test
 
@@ -133,11 +139,18 @@ one-time TCC grants from the caveats. Upgrade with `brew reinstall skylight`
   scheduler guarantees one request at a time per app key. **If you add a method
   that touches per-app state, add it to `RequestClassifier`** — unlisted
   methods fall back to `.exclusive`, which is safe but serializes everything.
+  Display captures (`screenshot`/`zoom`) share the `$display` key; clipboard
+  and `list_displays` are meta.
   The app identifier is resolved to a pid *before* dispatch so `"Notes"` and
   `"com.apple.Notes"` cannot get two slots for one app.
-- **Coordinate contract:** `click`/`drag` x/y are **screenshot pixels**;
-  `global = px/backingScale + windowOrigin`. One `captureGeometry`/`backingScaleFactor`
-  source feeds both the screenshot dimensions and the click conversion — keep it that way.
+- **Coordinate contract:** `click`/`drag` x/y are **screenshot pixels** of the
+  latest image of that target; `global = px/scale + origin`. Per app the origin
+  is the window's and the scale is whatever the window screenshot actually came
+  back at (`max_dimension` can shrink it below the backing scale — main.swift
+  re-commits the geometry with the returned scale, so image and click math
+  never disagree). With `display_id` the same formula runs against
+  `DisplayGeometryStore`'s latest `screenshot` of that display (default 1 px per
+  point). `zoom` is read-only and never changes click geometry.
 - **Sticky indices:** `element_index` values are stable per element across
   captures (keyed by CFEqual/CFHash), never reused. This is what makes diffing
   coherent and index→element resolution work. All map access stays on the serial queue.
@@ -163,6 +176,19 @@ one-time TCC grants from the caveats. Upgrade with `brew reinstall skylight`
   either side fails. Fields are snake_case except `disableDiff` (camelCase, matches
   the reference API).
 
+- **Implicit app targets:** `press_key`/`type_text` without `app` go to the
+  frontmost app; `click`/`drag` with `display_id` and no `app` hit-test the
+  point (`AXUIElementCopyElementAtPosition` on the system-wide element) and
+  fall back to frontmost. Both still pass the approvals gate. Apps without a
+  focused window (menu-bar apps, bare dialogs) are activated without a raise.
+- **Spaces:** `SkyLightBridge` also dlsyms the Spaces symbols
+  (`SLSGetActiveSpace`, `SLSCopySpacesForWindows`, `SLSMoveWindowsToManagedSpace`,
+  and the `SLSSpaceSetCompatID`+`SLSSetWindowListWorkspace` workaround yabai
+  uses where the direct move is ignored). `bring_to_active_space` tries the
+  direct move, then the workaround, and reports `moved` only after re-reading
+  the window's Spaces — never trust the call, verify. Reported as
+  `capabilities.skylight.space_management`.
+
 ## API methods
 
 `capabilities` (TCC grants + which private SkyLight capabilities resolved +
@@ -179,11 +205,28 @@ popover's key-status-dependent attachment quirk), `click` (element_index OR x/y)
 `press_key`, `type_text`,
 `scroll`, `set_value`, `drag`, `perform_secondary_action`, `select_text`, plus
 `ping`/`echo`. Every action takes optional `background: true` (per-request
-no-focus-steal override). Actuation is gated by the opt-in per-app allowlist in
+no-focus-steal override). Pixel path: `list_displays`, `screenshot` (whole
+display, default 1 px/pt, `max_dimension` cap, cursor shown), `zoom` (native
+crop of a region of the latest screenshot), and `click`/`drag` with
+`display_id`. Also `read_clipboard`/`write_clipboard` (not app-scoped, so not
+approval-gated; the write is audited) and `bring_to_active_space`.
+`get_app_state` accepts `max_dimension` too. `list_windows` reports
+`is_on_active_space` when the Spaces bridge resolved. Actuation is gated by the opt-in per-app allowlist in
 `~/Library/Application Support/skylight/approvals.json` (`skylight approve`);
 unlisted apps fail `approval_required`. The allowlist is a guardrail, not a
 security boundary — any local process of this user can edit the file or drive
 the socket directly. See `ts/sky.d.ts`.
+
+## MCP server
+
+`skylight-run --mcp` serves the daemon over stdio (`ts/src/mcp.ts`, using
+`@modelcontextprotocol/sdk`). Register once with
+`claude mcp add --scope user skylight -- ~/bin/skylight-run --mcp`; the tools
+then appear as `mcp__skylight__*`. Screenshots return as image content, capped
+at `SKYLIGHT_MCP_MAX_DIMENSION` (default 1568) on the long side; the daemon
+keeps the matching geometry so coordinates the model reads off an image are
+passed straight back. Nothing in the `--mcp` path may write to stdout except
+the transport.
 
 ## Docs
 

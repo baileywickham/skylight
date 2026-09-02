@@ -24,10 +24,11 @@ let postActionSleepMs = env["SKYLIGHT_POST_ACTION_SLEEP_MS"].flatMap(Int.init) ?
 // activation-first behavior exactly. See Actuation/Activation.swift for the
 // best-effort caveats on keyboard/coordinate input to non-frontmost apps.
 let background = ["1", "true", "yes"].contains((env["SKYLIGHT_BACKGROUND"] ?? "").lowercased())
-let screenshotter = Screenshotter(shotsDir: shotsDir)
+let displayGeometry = DisplayGeometryStore()
+let screenshotter = Screenshotter(shotsDir: shotsDir, displayGeometry: displayGeometry)
 let actuator = Actuator(registry: registry, capture: axCapture,
                         postActionSleepMs: postActionSleepMs, background: background,
-                        approvals: Approvals())
+                        approvals: Approvals(), displayGeometry: displayGeometry)
 
 /// Wraps a throwing handler: SkyServiceError → structured error response,
 /// anything else → capture_failed with the description.
@@ -112,7 +113,8 @@ router.register("get_app_state", handle("get_app_state", GetAppStateInput.self) 
     do {
         shot = try awaitResult {
             try await screenshotter.capture(window: captured.window,
-                                            includeDataURL: input.include_data_url ?? false)
+                                            includeDataURL: input.include_data_url ?? false,
+                                            maxDimension: input.max_dimension)
         }
     } catch let error as SkyServiceError {
         shotError = "\(error.code.rawValue): \(error.message)"
@@ -121,29 +123,81 @@ router.register("get_app_state", handle("get_app_state", GetAppStateInput.self) 
         // ScreenCaptureKit failure also degrades to AX-only instead of failing.
         shotError = "capture_failed: \(error)"
     }
-    axCapture.commitBaseline(captured, forPid: app.processIdentifier)
+    // The click geometry must describe the image the model got: a
+    // max_dimension downscale changes pixels-per-point, so commit the scale
+    // the screenshot actually came back at (window origin is unchanged).
+    var committed = captured
+    if let scale = shot?.scale, scale != captured.geometry.scale {
+        committed = CaptureResult(text: captured.text, lines: captured.lines, window: captured.window,
+                                  geometry: CaptureGeometry(windowOriginX: captured.geometry.windowOriginX,
+                                                            windowOriginY: captured.geometry.windowOriginY,
+                                                            scale: scale),
+                                  windowID: captured.windowID, diffed: captured.diffed)
+    }
+    axCapture.commitBaseline(committed, forPid: app.processIdentifier)
     auditLog.record(method: "get_app_state", target: input.app,
                     outcome: shotError == nil ? "ok" : "ok-ax-only")
     return AppState(text: captured.text, screenshot: shot,
                     screenshot_error: shotError, diffed: captured.diffed)
 })
 router.register("click", actuation("click", ClickInput.self,
-    target: { "\($0.app)[\($0.element_index.map(String.init) ?? "@\($0.x ?? -1),\($0.y ?? -1)")]" },
+    target: {
+        let space = $0.display_id.map { "display:\($0)" } ?? ""
+        return "\($0.app ?? "<implicit>")[\($0.element_index.map(String.init) ?? "@\($0.x ?? -1),\($0.y ?? -1)\(space)")]"
+    },
     actuator.click))
 router.register("press_key", actuation("press_key", PressKeyInput.self,
-    target: { "\($0.app) keys=\($0.keys)" }, actuator.pressKey))
+    target: { "\($0.app ?? "<frontmost>") keys=\($0.keys)" }, actuator.pressKey))
 router.register("type_text", actuation("type_text", TypeTextInput.self,
-    target: { "\($0.app) (\($0.text.count) chars)" }, actuator.typeText))
+    target: { "\($0.app ?? "<frontmost>") (\($0.text.count) chars)" }, actuator.typeText))
 router.register("scroll", actuation("scroll", ScrollInput.self,
     target: { "\($0.app)[\($0.element_index)] \($0.direction) x\($0.pages)" }, actuator.scroll))
 router.register("set_value", actuation("set_value", SetValueInput.self,
     target: { "\($0.app)[\($0.element_index)]" }, actuator.setValue))
 router.register("drag", actuation("drag", DragInput.self,
-    target: { "\($0.app) (\($0.from_x),\($0.from_y))->(\($0.to_x),\($0.to_y))" }, actuator.drag))
+    target: { "\($0.app ?? "<implicit>") (\($0.from_x),\($0.from_y))->(\($0.to_x),\($0.to_y))\($0.display_id.map { " display:\($0)" } ?? "")" },
+    actuator.drag))
 router.register("perform_secondary_action", actuation("perform_secondary_action", PerformSecondaryActionInput.self,
     target: { "\($0.app)[\($0.element_index)] \($0.action)" }, actuator.performSecondaryAction))
 router.register("select_text", actuation("select_text", SelectTextInput.self,
     target: { "\($0.app)[\($0.element_index)]" }, actuator.selectText))
+
+// Displays: whole-screen capture (the pixel-based computer-use path), a
+// native-resolution zoom for small text, and the display list that names them.
+router.register("list_displays", handle("list_displays", EmptyParams.self) { _ in listDisplays() })
+router.register("screenshot", handle("screenshot", ScreenshotInput.self) { input in
+    let result = try awaitResult { try await screenshotter.captureDisplay(input) }
+    auditLog.record(method: "screenshot", target: "display:\(result.display_id)", outcome: "ok")
+    return result
+})
+router.register("zoom", handle("zoom", ZoomInput.self) { input in
+    try awaitResult { try await screenshotter.zoom(input) }
+})
+
+// Clipboard: not app-scoped, so not approval-gated; the write is audited.
+router.register("read_clipboard", handle("read_clipboard", EmptyParams.self) { _ in Clipboard.read() })
+router.register("write_clipboard", handle("write_clipboard", WriteClipboardInput.self) { input in
+    if FileManager.default.fileExists(atPath: SkylightPaths.pauseFile.path) {
+        throw SkyServiceError(code: .actuationPaused,
+                              message: "actuation paused by \(SkylightPaths.pauseFile.path); remove the file to resume")
+    }
+    let result = Clipboard.write(text: input.text)
+    auditLog.record(method: "write_clipboard", target: "(\(input.text.count) chars)", outcome: result.done ? "ok" : "error")
+    return result
+})
+
+// Spaces: move a window onto the active Space without switching to its own.
+router.register("bring_to_active_space", handle("bring_to_active_space", BringToActiveSpaceInput.self) { input in
+    do {
+        let result = try actuator.bringToActiveSpace(input)
+        auditLog.record(method: "bring_to_active_space", target: "\(input.app)[\(result.window_id)]",
+                        outcome: result.moved ? "moved" : (result.on_active_space ? "already" : "failed"))
+        return result
+    } catch let error as SkyServiceError {
+        auditLog.record(method: "bring_to_active_space", target: input.app, outcome: "error:\(error.code.rawValue)")
+        throw error
+    }
+})
 
 // Startup permission report: precise instructions if grants are missing.
 // Ask for Screen Recording FIRST when it is missing: the preflight the rest of

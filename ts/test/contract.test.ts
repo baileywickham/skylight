@@ -3,7 +3,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildRequest } from "../src/client.js";
-import type { ActionResult, AppState, CapabilitiesResult, ListAppsResult, ListWindowsResult } from "../src/types.js";
+import type {
+  ActionResult, AppState, BringToActiveSpaceResult, CapabilitiesResult, ClipboardResult, DisplayScreenshot,
+  ListAppsResult, ListDisplaysResult, ListWindowsResult,
+} from "../src/types.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixtures = JSON.parse(
@@ -48,6 +51,23 @@ describe("contract", () => {
       } else if (resp.decodes_to === "ActionResult") {
         const r = resp.json as ActionResult;
         expect(typeof r.done).toBe("boolean");
+      } else if (resp.decodes_to === "ListDisplaysResult") {
+        const r = resp.json as ListDisplaysResult;
+        expect(typeof r.displays[0].display_id).toBe("number");
+        expect(typeof r.displays[0].backing_scale).toBe("number");
+      } else if (resp.decodes_to === "DisplayScreenshotResult") {
+        const r = resp.json as DisplayScreenshot;
+        expect(typeof r.url).toBe("string");
+        expect(typeof r.scale).toBe("number");
+        expect(typeof r.origin_x).toBe("number");
+      } else if (resp.decodes_to === "ClipboardResult") {
+        const r = resp.json as ClipboardResult;
+        expect(Array.isArray(r.types)).toBe(true);
+        expect(typeof r.change_count).toBe("number");
+      } else if (resp.decodes_to === "BringToActiveSpaceResult") {
+        const r = resp.json as BringToActiveSpaceResult;
+        expect(typeof r.moved).toBe("boolean");
+        expect(typeof r.on_active_space).toBe("boolean");
       } else {
         throw new Error(`unhandled result type ${resp.decodes_to}`);
       }

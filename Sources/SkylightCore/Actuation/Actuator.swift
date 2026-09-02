@@ -55,16 +55,20 @@ public final class Actuator {
     /// per request via its optional `background` field.
     private let defaultBackground: Bool
     private let approvals: Approvals
+    /// Latest `screenshot` geometry per display, for click/drag with display_id.
+    private let displayGeometry: DisplayGeometryStore
 
     public init(registry: AppRegistry, capture: AXCapture,
                 postActionSleepMs: Int = 100, pauseFile: URL = SkylightPaths.pauseFile,
-                background: Bool = false, approvals: Approvals = Approvals()) {
+                background: Bool = false, approvals: Approvals = Approvals(),
+                displayGeometry: DisplayGeometryStore = DisplayGeometryStore()) {
         self.registry = registry
         self.capture = capture
         self.postActionSleepMs = postActionSleepMs
         self.pauseFile = pauseFile
         self.defaultBackground = background
         self.approvals = approvals
+        self.displayGeometry = displayGeometry
     }
 
     /// Per-request override wins; absent falls back to the daemon default.
@@ -108,6 +112,56 @@ public final class Actuator {
         let app = try registry.resolve(identifier)
         try approvals.check(name: app.localizedName, bundleID: app.bundleIdentifier)
         return app
+    }
+
+    /// The app for an action that named none: the app owning the UI under
+    /// `point` (AX hit test), else the frontmost app. Approval-gated like an
+    /// explicit target. Hit-testing matters because the frontmost app is not
+    /// always what is under the pointer — a system dialog or another app's
+    /// floating panel can sit over it.
+    private func resolveImplicit(point: CGPoint?) throws -> NSRunningApplication {
+        if let point {
+            var element: AXUIElement?
+            if AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &element) == .success,
+               let element {
+                var pid: pid_t = 0
+                if AXUIElementGetPid(element, &pid) == .success, let app = NSRunningApplication(processIdentifier: pid) {
+                    try approvals.check(name: app.localizedName, bundleID: app.bundleIdentifier)
+                    return app
+                }
+            }
+        }
+        guard let front = NSWorkspace.shared.frontmostApplication else {
+            throw SkyServiceError(code: .appNotFound, message: "no frontmost app to target; pass app explicitly")
+        }
+        try approvals.check(name: front.localizedName, bundleID: front.bundleIdentifier)
+        return front
+    }
+
+    /// Explicit target when given, implicit (hit test / frontmost) otherwise.
+    private func resolveApproved(_ identifier: String?, near point: CGPoint? = nil) throws -> NSRunningApplication {
+        if let identifier { return try resolveApproved(identifier) }
+        return try resolveImplicit(point: point)
+    }
+
+    /// Display-coordinate actions: converts pixels of the latest `screenshot`
+    /// of `displayID` to a global point. Fails fast when there was no such
+    /// screenshot, exactly like window coordinates without a prior capture.
+    private func displayPoint(x: Double, y: Double, displayID: Int) throws -> CGPoint {
+        guard let geometry = displayGeometry.latest(forDisplay: CGDirectDisplayID(displayID)) else {
+            throw SkyServiceError(code: .invalidParams,
+                                  message: "no prior screenshot of display \(displayID) — coordinates are screenshot pixels; call screenshot first")
+        }
+        return displayGlobalPoint(x: x, y: y, geometry: geometry)
+    }
+
+    /// Like `target(_:needsGeometry:)` for a display-space action: the app is
+    /// hit-tested at `point` unless named, and the window is the app's focused
+    /// one if it has any (menu-bar apps and bare dialogs may not).
+    private func displayTarget(_ appIdentifier: String?, at point: CGPoint) throws
+        -> (app: NSRunningApplication, window: AXUIElement?) {
+        let app = try resolveApproved(appIdentifier, near: point)
+        return (app, try? capture.focusedWindow(of: app))
     }
 
     private func mouseButton(_ name: String?) throws -> (button: CGMouseButton, down: CGEventType, up: CGEventType, drag: CGEventType) {
@@ -160,12 +214,22 @@ public final class Actuator {
     /// `focusWithoutRaise`; pure AX-element actions skip it, since they work
     /// regardless of focus and flipping the user's frontmost app to inactive is
     /// a real (if brief) disturbance not worth paying for nothing.
-    private func prepareTarget(app: NSRunningApplication, window: AXUIElement,
+    private func prepareTarget(app: NSRunningApplication, window: AXUIElement?,
                                background: Bool, action: ActuatorAction) {
         guard shouldActivate(background: background) else {
-            if deliversSyntheticEvents(action: action) {
+            if deliversSyntheticEvents(action: action), let window {
                 focusWithoutRaise(app: app, window: window)
             }
+            return
+        }
+        guard let window else {
+            // No window to raise (menu-bar app, or a process whose dialog the
+            // AX hit test found but which reports no focused window): plain
+            // activation still routes session-tap events to it.
+            app.activate()
+            let deadline = Date().addingTimeInterval(2.0)
+            while !app.isActive && Date() < deadline { usleep(20_000) }
+            usleep(80_000)
             return
         }
         activateAndRaise(app: app, window: window)
@@ -198,6 +262,17 @@ public final class Actuator {
         }
     }
 
+    /// Keyboard actions: the named app's raised window, or — with no app —
+    /// the frontmost app and whatever focused window it has.
+    private func keyboardTarget(_ appIdentifier: String?) throws -> (app: NSRunningApplication, window: AXUIElement?) {
+        if let appIdentifier {
+            let (app, window, _) = try target(appIdentifier, needsGeometry: false)
+            return (app, window)
+        }
+        let app = try resolveImplicit(point: nil)
+        return (app, try? capture.focusedWindow(of: app))
+    }
+
     // MARK: - Actions
 
     public func click(_ input: ClickInput) throws -> ActionResult {
@@ -205,17 +280,34 @@ public final class Actuator {
         let background = effectiveBackground(input.background)
         _ = try mouseButton(input.mouse_button) // validate early
         if let index = input.element_index {
-            let app = try resolveApproved(input.app)
+            guard let appIdentifier = input.app else {
+                throw SkyServiceError(code: .invalidParams, message: "click by element_index needs app")
+            }
+            let app = try resolveApproved(appIdentifier)
             let element = try capture.element(forIndex: index, appPid: app.processIdentifier)
             let window = try capture.focusedWindow(of: app)
             prepareTarget(app: app, window: window, background: background, action: .elementClick)
             let err = AXUIElementPerformAction(element, kAXPressAction as CFString)
             guard err == .success else { throw mapAXError(err, action: "click[\(index)]") }
         } else if let x = input.x, let y = input.y {
-            let (app, window, geometry) = try target(input.app, needsGeometry: true)
-            prepareTarget(app: app, window: window, background: background, action: .coordinateClick)
+            let app: NSRunningApplication
+            let point: CGPoint
+            if let displayID = input.display_id {
+                point = try displayPoint(x: x, y: y, displayID: displayID)
+                let resolved = try displayTarget(input.app, at: point)
+                app = resolved.app
+                prepareTarget(app: app, window: resolved.window, background: background, action: .coordinateClick)
+            } else {
+                guard let appIdentifier = input.app else {
+                    throw SkyServiceError(code: .invalidParams,
+                                          message: "click by window coordinates needs app (or pass display_id for screen coordinates)")
+                }
+                let (resolvedApp, window, geometry) = try target(appIdentifier, needsGeometry: true)
+                app = resolvedApp
+                prepareTarget(app: app, window: window, background: background, action: .coordinateClick)
+                point = globalPoint(fromScreenshotX: x, y: y, geometry: geometry!)
+            }
             primeUserActivationIfNeeded(app: app, background: background)
-            let point = globalPoint(fromScreenshotX: x, y: y, geometry: geometry!)
             let (button, down, up, _) = try mouseButton(input.mouse_button)
             let clicks = input.click_count ?? 1
             for i in 1...max(clicks, 1) {
@@ -237,7 +329,7 @@ public final class Actuator {
         try guardNotPaused()
         let background = effectiveBackground(input.background)
         let chord = try parseKeyChord(input.keys)
-        let (app, window, _) = try target(input.app, needsGeometry: false)
+        let (app, window) = try keyboardTarget(input.app)
         prepareTarget(app: app, window: window, background: background, action: .pressKey)
         // The chord parse yields ANSI key codes; remap character keys to the
         // ACTIVE keyboard layout (on e.g. Dvorak the ANSI "c" code types "j",
@@ -266,7 +358,7 @@ public final class Actuator {
     public func typeText(_ input: TypeTextInput) throws -> ActionResult {
         try guardNotPaused()
         let background = effectiveBackground(input.background)
-        let (app, window, _) = try target(input.app, needsGeometry: false)
+        let (app, window) = try keyboardTarget(input.app)
         prepareTarget(app: app, window: window, background: background, action: .typeText)
         // Unicode key events into current focus, ~20 UTF-16 units per event
         // (surrogate pairs are never split across events; see utf16Chunks).
@@ -344,10 +436,26 @@ public final class Actuator {
         try guardNotPaused()
         let background = effectiveBackground(input.background)
         let (button, down, up, dragged) = try mouseButton(input.mouse_button)
-        let (app, window, geometry) = try target(input.app, needsGeometry: true)
-        prepareTarget(app: app, window: window, background: background, action: .drag)
-        let from = globalPoint(fromScreenshotX: input.from_x, y: input.from_y, geometry: geometry!)
-        let to = globalPoint(fromScreenshotX: input.to_x, y: input.to_y, geometry: geometry!)
+        let app: NSRunningApplication
+        let from: CGPoint
+        let to: CGPoint
+        if let displayID = input.display_id {
+            from = try displayPoint(x: input.from_x, y: input.from_y, displayID: displayID)
+            to = try displayPoint(x: input.to_x, y: input.to_y, displayID: displayID)
+            let resolved = try displayTarget(input.app, at: from)
+            app = resolved.app
+            prepareTarget(app: app, window: resolved.window, background: background, action: .drag)
+        } else {
+            guard let appIdentifier = input.app else {
+                throw SkyServiceError(code: .invalidParams,
+                                      message: "drag by window coordinates needs app (or pass display_id for screen coordinates)")
+            }
+            let (resolvedApp, window, geometry) = try target(appIdentifier, needsGeometry: true)
+            app = resolvedApp
+            prepareTarget(app: app, window: window, background: background, action: .drag)
+            from = globalPoint(fromScreenshotX: input.from_x, y: input.from_y, geometry: geometry!)
+            to = globalPoint(fromScreenshotX: input.to_x, y: input.to_y, geometry: geometry!)
+        }
         post(CGEvent(mouseEventSource: nil, mouseType: down, mouseCursorPosition: from, mouseButton: button),
              pid: app.processIdentifier, background: background)
         let steps = 12
@@ -375,6 +483,48 @@ public final class Actuator {
         guard err == .success else { throw mapAXError(err, action: "perform_secondary_action(\(input.action))") }
         postActionSleep()
         return ActionResult(done: true)
+    }
+
+    /// Moves a window onto the Space the user is looking at without switching
+    /// Spaces — the low-disturbance way to make an off-Space window
+    /// capturable and clickable. No-op when it is already there.
+    public func bringToActiveSpace(_ input: BringToActiveSpaceInput) throws -> BringToActiveSpaceResult {
+        try guardNotPaused()
+        guard SkyLightBridge.canManageSpaces else {
+            throw SkyServiceError(code: .notImplemented,
+                                  message: "Spaces bridge unavailable on this macOS (capabilities.skylight.space_management=false)")
+        }
+        let app = try resolveApproved(input.app)
+        let listings = try capture.windowListings(of: app)
+        let listing: AXCapture.WindowListing
+        if let wanted = input.window_id {
+            guard let match = listings.first(where: { $0.info.window_id == wanted }) else {
+                throw SkyServiceError(code: .invalidParams, message: "window_id \(wanted) is not a window of '\(input.app)'")
+            }
+            listing = match
+        } else {
+            guard let focused = listings.first(where: { $0.info.is_focused }) ?? listings.first else {
+                throw SkyServiceError(code: .noFocusedWindow, message: "'\(input.app)' has no windows")
+            }
+            listing = focused
+        }
+        guard let windowID = listing.info.window_id else {
+            throw SkyServiceError(code: .notImplemented, message: "window id bridge unavailable; cannot address the window")
+        }
+        let wid = CGWindowID(windowID)
+        if SkyLightBridge.isOnActiveSpace(windowID: wid) == true {
+            return BringToActiveSpaceResult(window_id: windowID, on_active_space: true, moved: false)
+        }
+        guard let active = SkyLightBridge.activeSpace() else {
+            throw SkyServiceError(code: .captureFailed, message: "cannot determine the active Space")
+        }
+        if let type = SkyLightBridge.spaceType(active), type == 4 {
+            throw SkyServiceError(code: .elementNotActionable,
+                                  message: "the active Space is a fullscreen app; windows cannot be moved into it")
+        }
+        let moved = SkyLightBridge.moveWindow(wid, toSpace: active)
+        postActionSleep()
+        return BringToActiveSpaceResult(window_id: windowID, on_active_space: moved, moved: moved)
     }
 
     /// Milestone 2: locate the match in the element's value and set the

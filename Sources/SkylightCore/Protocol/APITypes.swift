@@ -40,11 +40,16 @@ public struct WindowInfo: Codable, Equatable {
     public let title: String?
     public let is_focused: Bool
     public let is_minimized: Bool
-    public init(window_id: Int?, title: String?, is_focused: Bool, is_minimized: Bool) {
+    /// Whether the window is on the Space the user is looking at. Absent when
+    /// the Spaces bridge is unavailable (see capabilities.skylight.space_management).
+    public let is_on_active_space: Bool?
+    public init(window_id: Int?, title: String?, is_focused: Bool, is_minimized: Bool,
+                is_on_active_space: Bool? = nil) {
         self.window_id = window_id
         self.title = title
         self.is_focused = is_focused
         self.is_minimized = is_minimized
+        self.is_on_active_space = is_on_active_space
     }
 }
 
@@ -63,11 +68,142 @@ public struct ScreenshotResult: Codable, Equatable {
     public let data_url: String?
     public let width: Int
     public let height: Int
-    public init(url: String, data_url: String?, width: Int, height: Int) {
+    /// PNG pixels per screen point (2.0 on a Retina window at full size; lower
+    /// when `max_dimension` downscaled it). Coordinates given back to click/
+    /// drag are always pixels of THIS image, so callers never need it.
+    public let scale: Double?
+    public init(url: String, data_url: String?, width: Int, height: Int, scale: Double? = nil) {
         self.url = url
         self.data_url = data_url
         self.width = width
         self.height = height
+        self.scale = scale
+    }
+}
+
+// MARK: - Displays
+
+public struct DisplayInfo: Codable, Equatable {
+    /// CGDirectDisplayID — pass to screenshot/zoom/click as display_id.
+    public let display_id: Int
+    /// Size in points.
+    public let width: Double
+    public let height: Double
+    /// Global top-left origin in points (the main display is 0,0; CGEvent space).
+    public let origin_x: Double
+    public let origin_y: Double
+    /// Backing scale (2.0 on Retina).
+    public let backing_scale: Double
+    public let is_main: Bool
+    public let name: String?
+    public init(display_id: Int, width: Double, height: Double, origin_x: Double, origin_y: Double,
+                backing_scale: Double, is_main: Bool, name: String?) {
+        self.display_id = display_id
+        self.width = width
+        self.height = height
+        self.origin_x = origin_x
+        self.origin_y = origin_y
+        self.backing_scale = backing_scale
+        self.is_main = is_main
+        self.name = name
+    }
+}
+
+public struct ListDisplaysResult: Codable, Equatable {
+    public let displays: [DisplayInfo]
+    public init(displays: [DisplayInfo]) { self.displays = displays }
+}
+
+public struct ScreenshotInput: Codable, Equatable {
+    /// Default: the main display.
+    public let display_id: Int?
+    /// Longest side of the PNG in pixels; the image is downscaled to fit.
+    /// Default: 1 px per point (a 2x display is captured at 1x).
+    public let max_dimension: Int?
+    public let include_data_url: Bool?
+    /// Draw the pointer. Default true — on a whole-desktop shot the cursor is
+    /// useful context, unlike a window crop.
+    public let show_cursor: Bool?
+    public init(display_id: Int? = nil, max_dimension: Int? = nil, include_data_url: Bool? = nil,
+                show_cursor: Bool? = nil) {
+        self.display_id = display_id
+        self.max_dimension = max_dimension
+        self.include_data_url = include_data_url
+        self.show_cursor = show_cursor
+    }
+}
+
+/// A display (or display-region) capture. `global = origin + px / scale`.
+public struct DisplayScreenshotResult: Codable, Equatable {
+    public let display_id: Int
+    public let url: String
+    public let data_url: String?
+    public let width: Int
+    public let height: Int
+    /// PNG pixels per screen point.
+    public let scale: Double
+    /// Global point of PNG pixel (0,0).
+    public let origin_x: Double
+    public let origin_y: Double
+    public init(display_id: Int, url: String, data_url: String?, width: Int, height: Int,
+                scale: Double, origin_x: Double, origin_y: Double) {
+        self.display_id = display_id
+        self.url = url
+        self.data_url = data_url
+        self.width = width
+        self.height = height
+        self.scale = scale
+        self.origin_x = origin_x
+        self.origin_y = origin_y
+    }
+}
+
+public struct ZoomInput: Codable, Equatable {
+    /// Default: the main display.
+    public let display_id: Int?
+    /// Region in pixels of the latest `screenshot` of that display (points when
+    /// there has been none).
+    public let x: Double
+    public let y: Double
+    public let width: Double
+    public let height: Double
+    /// Longest side cap; default: the display's native backing scale.
+    public let max_dimension: Int?
+    public let include_data_url: Bool?
+    public init(display_id: Int? = nil, x: Double, y: Double, width: Double, height: Double,
+                max_dimension: Int? = nil, include_data_url: Bool? = nil) {
+        self.display_id = display_id
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.max_dimension = max_dimension
+        self.include_data_url = include_data_url
+    }
+}
+
+// MARK: - Spaces
+
+public struct BringToActiveSpaceInput: Codable, Equatable {
+    public let app: String
+    /// Default: the app's focused window.
+    public let window_id: Int?
+    public init(app: String, window_id: Int? = nil) {
+        self.app = app
+        self.window_id = window_id
+    }
+}
+
+public struct BringToActiveSpaceResult: Codable, Equatable {
+    public let window_id: Int
+    /// True when the window is on the active Space after the call.
+    public let on_active_space: Bool
+    /// True when this call moved it (false when it was already there).
+    public let moved: Bool
+    public init(window_id: Int, on_active_space: Bool, moved: Bool) {
+        self.window_id = window_id
+        self.on_active_space = on_active_space
+        self.moved = moved
     }
 }
 
@@ -122,30 +258,44 @@ public struct GetAppStateInput: Codable, Equatable {
     public let window_id: Int?
     public let disableDiff: Bool?
     public let include_data_url: Bool?
-    public init(app: String, window_id: Int? = nil, disableDiff: Bool? = nil, include_data_url: Bool? = nil) {
+    /// Longest side of the screenshot in pixels; downscaled to fit. Default:
+    /// native backing scale. Click/drag coordinates stay pixels of the image
+    /// returned, whatever the scale.
+    public let max_dimension: Int?
+    public init(app: String, window_id: Int? = nil, disableDiff: Bool? = nil, include_data_url: Bool? = nil,
+                max_dimension: Int? = nil) {
         self.app = app
         self.window_id = window_id
         self.disableDiff = disableDiff
         self.include_data_url = include_data_url
+        self.max_dimension = max_dimension
     }
 }
 
 public struct ClickInput: Codable, Equatable {
-    public let app: String
+    /// Required for element_index and window-coordinate clicks. Optional with
+    /// display_id: the app under the point is hit-tested (frontmost app as
+    /// fallback) and approval-checked like any other target.
+    public let app: String?
     public let element_index: Int?
     public let x: Double?
     public let y: Double?
+    /// When set, x/y are pixels of the latest `screenshot` of this display
+    /// instead of the latest get_app_state window capture.
+    public let display_id: Int?
     public let mouse_button: String?   // "left" | "right" | "middle"
     public let click_count: Int?
     /// Per-request background override: true = never activate / post per-pid,
     /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
     public let background: Bool?
-    public init(app: String, element_index: Int? = nil, x: Double? = nil, y: Double? = nil,
-                mouse_button: String? = nil, click_count: Int? = nil, background: Bool? = nil) {
+    public init(app: String? = nil, element_index: Int? = nil, x: Double? = nil, y: Double? = nil,
+                display_id: Int? = nil, mouse_button: String? = nil, click_count: Int? = nil,
+                background: Bool? = nil) {
         self.app = app
         self.element_index = element_index
         self.x = x
         self.y = y
+        self.display_id = display_id
         self.mouse_button = mouse_button
         self.click_count = click_count
         self.background = background
@@ -153,12 +303,13 @@ public struct ClickInput: Codable, Equatable {
 }
 
 public struct PressKeyInput: Codable, Equatable {
-    public let app: String
+    /// Default: the frontmost app.
+    public let app: String?
     public let keys: String            // "+"-separated chord, e.g. "Ctrl+Shift+t"
     /// Per-request background override: true = never activate / post per-pid,
     /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
     public let background: Bool?
-    public init(app: String, keys: String, background: Bool? = nil) {
+    public init(app: String? = nil, keys: String, background: Bool? = nil) {
         self.app = app
         self.keys = keys
         self.background = background
@@ -166,12 +317,13 @@ public struct PressKeyInput: Codable, Equatable {
 }
 
 public struct TypeTextInput: Codable, Equatable {
-    public let app: String
+    /// Default: the frontmost app.
+    public let app: String?
     public let text: String
     /// Per-request background override: true = never activate / post per-pid,
     /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
     public let background: Bool?
-    public init(app: String, text: String, background: Bool? = nil) {
+    public init(app: String? = nil, text: String, background: Bool? = nil) {
         self.app = app
         self.text = text
         self.background = background
@@ -211,22 +363,27 @@ public struct SetValueInput: Codable, Equatable {
 }
 
 public struct DragInput: Codable, Equatable {
-    public let app: String
+    /// Required for window-coordinate drags; optional with display_id (the app
+    /// under the start point is hit-tested, frontmost as fallback).
+    public let app: String?
     public let from_x: Double
     public let from_y: Double
     public let to_x: Double
     public let to_y: Double
+    /// When set, coordinates are pixels of the latest `screenshot` of this display.
+    public let display_id: Int?
     public let mouse_button: String?
     /// Per-request background override: true = never activate / post per-pid,
     /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
     public let background: Bool?
-    public init(app: String, from_x: Double, from_y: Double, to_x: Double, to_y: Double, mouse_button: String? = nil,
-                background: Bool? = nil) {
+    public init(app: String? = nil, from_x: Double, from_y: Double, to_x: Double, to_y: Double,
+                display_id: Int? = nil, mouse_button: String? = nil, background: Bool? = nil) {
         self.app = app
         self.from_x = from_x
         self.from_y = from_y
         self.to_x = to_x
         self.to_y = to_y
+        self.display_id = display_id
         self.mouse_button = mouse_button
         self.background = background
     }
