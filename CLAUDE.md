@@ -47,11 +47,11 @@ or `{"id":n,"ok":false,"error":{"code":"<slug>","message":"..."}}`.
   - `Geometry/CoordinateModel`, `AppRegistry`, `Permissions`, `Paths`, `AuditLog`.
 - `Sources/SkylightService/main.swift` — the daemon: registers all methods, owns
   the run loop, audit log, kill switch.
-- `Sources/skylight/main.swift` — the `skylight` CLI (`doctor`, `start`, usage).
+- `Sources/skylight/main.swift` — the `skylight` CLI (`doctor`, `start`, `register`/`unregister`, approvals, usage).
 - `ts/` — the `@skylight/sky` client (`src/client.ts`, `src/types.ts`,
   `sky.d.ts`) + tests, and `src/mcp.ts`, the MCP server (`skylight-run --mcp`)
-  that exposes every method as a tool. `packaging/`, `scripts/` — .app +
-  LaunchAgent + signing.
+  that exposes every method as a tool. `packaging/` (Info.plist + LaunchAgent), `scripts/`
+  (`build.sh`, `install-local.sh`, `skylight-run`).
 
 ## Build / test
 
@@ -81,28 +81,35 @@ npx tsx driver.ts
 `ts/test/smoke.test.ts` is the canonical example of spawning the daemon and
 driving it with the client. Stop the daemon with SIGTERM (it unlinks the socket).
 
-## Install (Homebrew)
+## Install (Homebrew cask)
 
-The repo doubles as a tap; `Formula/skylight.rb` is head-only (private repo,
-builds from main over SSH):
+Skylight ships as a signed, notarized `SkylightService.app` via the
+`baileywickham/tap` cask, on the same pipeline as ArtWall and Beads:
 
 ```bash
-brew tap baileywickham/skylight git@github.com:baileywickham/skylight.git
-brew install --HEAD baileywickham/skylight/skylight
-skylight-install   # sign + register LaunchAgent; rerun after every reinstall
+brew tap baileywickham/tap
+brew install --cask skylight     # app → /Applications, `skylight` + `skylight-run` on PATH
+skylight doctor                  # then grant Accessibility + Screen Recording (caveats)
 ```
 
-Installs `skylight`, `skylight-run` (keg-layout aware: ts client vendored in
-libexec, daemon delegated to launchd, never spawned as a terminal child), and
-`skylight-install`, which signs `SkylightService.app` with a stable identity
-("Skylight Dev" > Developer ID > Apple Development) and runs
-`scripts/install-launchagent.sh` (app → `~/Applications`, LaunchAgent
-bootstrapped). Signing cannot live in the formula: Homebrew sandboxes
-post_install, which blocks keychain access. NOT `brew services`, because TCC
-keys bare-binary grants to the Cellar path, which moves every HEAD reinstall;
-the signed bundle keeps grants across upgrades. First install needs the
-one-time TCC grants from the caveats. Upgrade with `brew reinstall skylight`
-(HEAD formulae don't auto-upgrade) + `skylight-install`.
+The bundle carries everything: the daemon (`Contents/MacOS/SkylightService`),
+the CLI (`Contents/MacOS/skylight`, so `Bundle.main` is the .app), the driver
+wrapper (`Contents/Resources/bin/skylight-run`), the TS client source
+(`Contents/Resources/ts`), and the LaunchAgent
+(`Contents/Library/LaunchAgents/com.skylight.SkylightService.plist`,
+`BundleProgram`-relative). The cask's postflight runs `skylight register`, which
+registers that agent with `SMAppService` and starts the daemon — no separate
+signing or install step, and `brew upgrade` just works. `skylight-run` stages
+the TS client + `node_modules` under `~/Library/Application Support/skylight/ts-<version>`
+on first run so the signed bundle is never written to.
+
+Releases: `./release.sh patch` tags `vX.Y.Z`; `.github/workflows/release.yml`
+runs `scripts/build.sh` (sign + notarize + DMG/ZIP), publishes the GitHub
+release, then calls the tap's reusable `bump-cask` workflow to update the cask.
+Dev install from a checkout: `scripts/install-local.sh` (same build, local
+Developer ID / Apple Development identity, no notarization, `/Applications`).
+Never run the daemon as a terminal child in installed mode: TCC keys the grants
+to the launchd-launched .app.
 
 ## Conventions & gotchas (learned the hard way — don't regress these)
 

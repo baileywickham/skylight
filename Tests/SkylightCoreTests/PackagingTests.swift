@@ -18,22 +18,24 @@ final class PackagingTests: XCTestCase {
         XCTAssertEqual(info["CFBundleExecutable"] as? String, "SkylightService")
     }
 
-    func testLaunchAgentRunsTheBundledBinary() throws {
+    func testLaunchAgentIsBundleRelative() throws {
+        // Registered via SMAppService from inside the .app, so the program path
+        // must be bundle-relative (BundleProgram), never an absolute path, and
+        // nothing in it may depend on $HOME (launchd does not expand it).
         let agent = try plist("packaging/com.skylight.SkylightService.plist")
         XCTAssertEqual(agent["Label"] as? String, "com.skylight.SkylightService")
-        let args = agent["ProgramArguments"] as? [String]
-        XCTAssertEqual(args?.first, "__HOME__/Applications/SkylightService.app/Contents/MacOS/SkylightService")
+        XCTAssertEqual(agent["BundleProgram"] as? String, "Contents/MacOS/SkylightService")
+        XCTAssertNil(agent["ProgramArguments"])
+        XCTAssertNil(agent["StandardErrorPath"])
         XCTAssertEqual(agent["RunAtLoad"] as? Bool, true)
-        // C1: launchd starts the daemon with cwd `/`, so the shots dir must be
-        // pinned to an absolute, writable location via the environment.
+        // The daemon redirects its own stderr to ~/Library/Logs/skylight when
+        // launched this way (see SkylightService/main.swift).
         let envVars = agent["EnvironmentVariables"] as? [String: String]
-        XCTAssertEqual(envVars?["SKYLIGHT_SHOTS_DIR"],
-                       "__HOME__/Library/Application Support/skylight/shots")
+        XCTAssertEqual(envVars?["SKYLIGHT_STDERR_TO_LOG"], "1")
     }
 
     func testShellScriptsParse() throws {
-        for script in ["scripts/package-app.sh", "scripts/install-launchagent.sh", "scripts/skylight-run",
-                       "scripts/skylight-install"] {
+        for script in ["scripts/build.sh", "scripts/install-local.sh", "scripts/skylight-run", "release.sh"] {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/bin/bash")
             p.arguments = ["-n", repoRoot.appendingPathComponent(script).path]

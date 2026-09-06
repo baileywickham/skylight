@@ -1,6 +1,37 @@
 import AppKit
 import Foundation
 import SkylightCore
+import ServiceManagement
+
+// `SkylightService --register` / `--unregister` / `--status`: manage the bundled LaunchAgent
+// via SMAppService. This lives in the daemon (the bundle's CFBundleExecutable)
+// rather than the `skylight` CLI because smd only honours registration from the
+// bundle's main executable: registering from a helper binary "succeeds" but
+// launchd then refuses to spawn the agent (EX_CONFIG) and unregister is denied.
+// The CLI's `skylight register` execs this.
+if let flag = CommandLine.arguments.dropFirst().first, ["--register", "--unregister", "--status"].contains(flag) {
+    let service = SMAppService.agent(plistName: "com.skylight.SkylightService.plist")
+    do {
+        if flag == "--register" { try service.register() }
+        if flag == "--unregister" { try service.unregister() }
+    } catch {
+        // register() throws on an already-enabled agent on some releases;
+        // only the resulting status matters.
+        if flag == "--unregister" || service.status != .enabled {
+            FileHandle.standardError.write(Data("\(flag) failed: \(error)\n".utf8))
+            exit(1)
+        }
+    }
+    switch service.status {
+    case .enabled: print("enabled")
+    case .requiresApproval: print("requiresApproval")
+    case .notRegistered: print("notRegistered")
+    case .notFound: print("notFound")
+    @unknown default: print("unknown")
+    }
+    exit(0)
+}
+
 
 // A client that disconnects before reading its response must never kill the
 // daemon: ignore SIGPIPE process-wide (writes then fail with EPIPE instead).
@@ -198,6 +229,16 @@ router.register("bring_to_active_space", handle("bring_to_active_space", BringTo
         throw error
     }
 })
+
+// Under launchd there is no terminal and the bundled LaunchAgent plist cannot
+// name a $HOME-relative StandardErrorPath, so the agent sets
+// SKYLIGHT_STDERR_TO_LOG=1 and the daemon points its own stderr at the log.
+if ProcessInfo.processInfo.environment["SKYLIGHT_STDERR_TO_LOG"] == "1" {
+    let logURL = SkylightPaths.logsDir.appendingPathComponent("service.log")
+    try? FileManager.default.createDirectory(at: SkylightPaths.logsDir, withIntermediateDirectories: true)
+    let fd = open(logURL.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+    if fd >= 0 { dup2(fd, STDERR_FILENO); close(fd) }
+}
 
 // Startup permission report: precise instructions if grants are missing.
 // Ask for Screen Recording FIRST when it is missing: the preflight the rest of

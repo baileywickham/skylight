@@ -1,4 +1,5 @@
 import Foundation
+import ServiceManagement
 import SkylightCore
 
 func doctor() {
@@ -23,25 +24,100 @@ func doctor() {
     print("        is authoritative once SkylightService.app is installed and running.")
 }
 
+let agentLabel = "com.skylight.SkylightService"
+let agentPlist = "\(agentLabel).plist"
+
+/// The bundled LaunchAgent lives at Contents/Library/LaunchAgents/ and is
+/// managed through the daemon binary (`SkylightService --register`): smd only
+/// honours SMAppService calls from the bundle's main executable, so this CLI
+/// (a second Mach-O in Contents/MacOS) delegates rather than calling
+/// SMAppService itself.
+var bundleURL: URL { Bundle.main.bundleURL }
+var daemonURL: URL { bundleURL.appendingPathComponent("Contents/MacOS/SkylightService") }
+
+var insideBundle: Bool {
+    bundleURL.pathExtension == "app"
+        && FileManager.default.fileExists(atPath: bundleURL
+            .appendingPathComponent("Contents/Library/LaunchAgents/\(agentPlist)").path)
+}
+
+/// Runs `SkylightService --register|--unregister` and returns its status word.
+func agentControl(_ flag: String) -> String {
+    let task = Process()
+    task.executableURL = daemonURL
+    task.arguments = [flag]
+    let out = Pipe()
+    task.standardOutput = out
+    do { try task.run() } catch {
+        print("error: cannot run \(daemonURL.path): \(error)")
+        exit(1)
+    }
+    task.waitUntilExit()
+    let word = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    if task.terminationStatus != 0 {
+        print("error: \(flag) failed (\(word.isEmpty ? "see above" : word))")
+        exit(1)
+    }
+    return word
+}
+
+func agentStatus() -> String { agentControl("--status") }
+
+func describe(_ status: String) -> String {
+    switch status {
+    case "enabled": return "enabled"
+    case "requiresApproval": return "requires approval (System Settings > General > Login Items)"
+    case "notRegistered": return "not registered"
+    case "notFound": return "not found (LaunchAgent plist missing from the bundle)"
+    default: return status
+    }
+}
+
+/// `skylight register` — register the bundled LaunchAgent with launchd
+/// (idempotent) and start the daemon. This is the whole install step: the
+/// cask's postflight runs it, and it is safe to rerun any time.
+func register() {
+    guard insideBundle else {
+        print("skylight register must run from inside SkylightService.app")
+        print("  (e.g. /Applications/SkylightService.app/Contents/MacOS/skylight register)")
+        exit(1)
+    }
+    let status = agentControl("--register")
+    print("LaunchAgent \(agentLabel): \(describe(status))")
+    if status == "requiresApproval" {
+        print("  -> approve it under System Settings > General > Login Items, then run 'skylight start'")
+        SMAppService.openSystemSettingsLoginItems()
+        exit(1)
+    }
+    start()
+}
+
+/// `skylight unregister` — stop the daemon and remove the LaunchAgent.
+func unregister() {
+    guard insideBundle else {
+        print("skylight unregister must run from inside SkylightService.app")
+        exit(1)
+    }
+    _ = agentControl("--unregister")
+    print("LaunchAgent \(agentLabel) unregistered")
+}
+
 func start() {
     if Permissions.socketIsLive(at: SkylightPaths.socketPath) {
         print("SkylightService already running (socket live).")
         return
     }
     // Never exec the daemon as a terminal child: TCC would attribute the
-    // permission checks to the terminal. Prefer the LaunchAgent, fall back to open -a.
-    let label = "com.skylight.SkylightService"
-    let agent = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/LaunchAgents/\(label).plist")
+    // permission checks to the terminal. launchd owns it; we only kick it.
+    if insideBundle, agentStatus() != "enabled" {
+        print("LaunchAgent \(agentLabel): \(describe(agentStatus()))")
+        print("  -> run 'skylight register'")
+        exit(1)
+    }
     let task = Process()
     task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-    task.arguments = FileManager.default.fileExists(atPath: agent.path)
-        ? ["kickstart", "gui/\(getuid())/\(label)"]
-        : []
-    if task.arguments!.isEmpty {
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        task.arguments = ["-a", "SkylightService"]
-    }
+    task.arguments = ["kickstart", "gui/\(getuid())/\(agentLabel)"]
     try? task.run()
     task.waitUntilExit()
     for _ in 0..<20 {
@@ -51,8 +127,8 @@ func start() {
         }
         usleep(250_000)
     }
-    print("SkylightService did not come up. Install it first:")
-    print("  scripts/package-app.sh && scripts/install-launchagent.sh")
+    print("SkylightService did not come up. Check ~/Library/Logs/skylight/service.log,")
+    print("or (re)install it: brew install --cask skylight  (dev: scripts/install-local.sh)")
     exit(1)
 }
 
@@ -128,29 +204,11 @@ func writeApprovals(_ cfg: ApprovalsConfig, to url: URL) {
     }
 }
 
-/// `skylight install-app <staged.app> <destination.app>` — used by
-/// install-launchagent.sh. Kept out of `usage` because it is an installer
-/// implementation detail, not something to run by hand.
-func installApp() {
-    let args = Array(CommandLine.arguments.dropFirst(2))
-    guard args.count == 2 else {
-        print("usage: skylight install-app <staged-bundle> <destination-bundle>")
-        exit(2)
-    }
-    do {
-        try AtomicInstall.install(source: URL(fileURLWithPath: args[0]),
-                                  destination: URL(fileURLWithPath: args[1]))
-        print("installed \(args[1])")
-    } catch {
-        print("error: \(error)")
-        exit(1)
-    }
-}
-
 switch CommandLine.arguments.dropFirst().first {
-case "install-app": installApp()
 case "doctor": doctor()
 case "start": start()
+case "register": register()
+case "unregister": unregister()
 case "usage": usage()
 case "approvals": showApprovals()
 case "approve":
@@ -161,6 +219,6 @@ case "approve":
     approve(name)
 case "allow-all": allowAll()
 default:
-    print("usage: skylight <start|doctor|usage|approvals|approve <app>|allow-all>")
+    print("usage: skylight <start|register|unregister|doctor|usage|approvals|approve <app>|allow-all>")
     exit(2)
 }

@@ -5,7 +5,7 @@ description: Use when asked to see, read, click, type into, or otherwise drive a
 
 # Skylight — driving native macOS apps
 
-Skylight (repo: `~/workspace/skylight`) is a local computer-use daemon: it captures an app window's accessibility (AX) tree + screenshot, and performs clicks/keys/typing on it. It also does the pixel-only path (whole-display screenshot, zoom, click at screen coordinates), clipboard, and Spaces. `skylight-run` (on PATH) wraps everything — daemon startup, module-format gotchas — so drivers work from any directory.
+Skylight (installed via `brew install --cask skylight`; repo: `~/workspace/skylight`) is a local computer-use daemon: it captures an app window's accessibility (AX) tree + screenshot, and performs clicks/keys/typing on it. It also does the pixel-only path (whole-display screenshot, zoom, click at screen coordinates), clipboard, and Spaces. `skylight-run` (on PATH) wraps everything — daemon startup, module-format gotchas — so drivers work from any directory.
 
 **If the `mcp__skylight__*` tools are available, use them** — same methods as below, screenshots arrive as images, no driver files. Drop to `skylight-run` drivers only for batch/parallel work that is awkward as one tool call at a time.
 
@@ -22,7 +22,7 @@ await sky.type_text({ app: "TextEdit", text: "hello" });'
 ```
 
 For longer drivers write a **`.mts` file** (never plain `.ts` outside the repo — CJS breaks top-level await; never `npx tsx -e`) importing:
-`import { sky } from '/Users/baileywickham/workspace/skylight/ts/src/index.js'`
+`import { sky } from '<dir>/src/index.js'` where `<dir>` is `$(skylight-run --ts-dir)`
 then `skylight-run driver.mts`. End with `sky.close()`.
 
 Other commands: `skylight-run --status` (permissions/socket report), `skylight-run --stop`.
@@ -35,7 +35,7 @@ Other commands: `skylight-run --status` (permissions/socket report), `skylight-r
 
 ## API quick reference
 
-All methods take `app` (app name, e.g. `"Finder"`). Full types: `~/workspace/skylight/ts/sky.d.ts`.
+All methods take `app` (app name, e.g. `"Finder"`). Full types: `$(skylight-run --ts-dir)/sky.d.ts`.
 
 | Method | Key params |
 |---|---|
@@ -118,7 +118,7 @@ Rules:
 ## Gotchas
 
 - Actions activate the target app (steals focus) by default. Pass `background: true` on any action to work without stealing focus — see "Background & parallel work" below.
-- If an action fails `approval_required`: the actuation allowlist is on — `skylight approve "<App>"` (binary: `~/workspace/skylight/.build/debug/skylight`), or `skylight allow-all` to disable the gate.
+- If an action fails `approval_required`: the actuation allowlist is on — `skylight approve "<App>"` (`skylight` is on PATH with the cask), or `skylight allow-all` to disable the gate.
 - Coordinates are **screenshot pixels**, not screen points — take them from the screenshot you just captured.
 - `type_text` types at the current focus/caret — `click` the target field first unless the app focuses it for you.
 - Apps may transform typed text (autocorrect, auto-capitalization) — verify by re-capture, not exact string match.

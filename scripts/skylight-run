@@ -21,27 +21,34 @@
 # to switch modes.
 set -euo pipefail
 
-# Two layouts (detected by where ts/ lives relative to this script):
+# Two layouts, detected by whether this script sits inside SkylightService.app:
 #   repo:      <repo>/scripts/skylight-run, ts client at <repo>/ts, debug
 #              daemon spawned as a dev-flow terminal child
-#   installed: <keg>/bin/skylight-run (Homebrew), ts client vendored at
-#              <keg>/libexec/ts, daemon owned by the launchd agent that
-#              `brew install` registered (TCC needs the launchd-launched
-#              .app, so this script never spawns the daemon itself here)
+#   installed: SkylightService.app/Contents/Resources/bin/skylight-run (the
+#              cask symlinks it into brew's bin). The TS client source ships
+#              in Contents/Resources/ts; its node_modules are installed per
+#              user under ~/Library/Application Support/skylight/ts-<version>
+#              so nothing is written inside the signed bundle. The daemon is
+#              owned by the bundled LaunchAgent (`skylight register`); TCC
+#              needs the launchd-launched .app, so this script never spawns it.
 BASE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 SOCK="$HOME/Library/Application Support/skylight/ipc/computeruse.sock"
 LOG="$HOME/Library/Logs/skylight/daemon.log"
 AGENT_LABEL="com.skylight.SkylightService"
-if [ -d "$BASE/ts" ]; then
+
+if [ -f "$BASE/../Info.plist" ]; then
+  INSTALLED=1
+  CONTENTS="$(cd "$BASE/.." && pwd)"
+  VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$CONTENTS/Info.plist" 2>/dev/null || echo unknown)"
+  TS_SRC="$BASE/ts"
+  TS_DIR="$HOME/Library/Application Support/skylight/ts-$VERSION"
+  DAEMON="" # launchd-managed; see ensure_daemon
+  CLI="$CONTENTS/MacOS/skylight"
+else
   INSTALLED=0
   TS_DIR="$BASE/ts"
   DAEMON="$BASE/.build/debug/SkylightService"
   CLI="$BASE/.build/debug/skylight"
-else
-  INSTALLED=1
-  TS_DIR="$BASE/libexec/ts"
-  DAEMON="" # launchd-managed; see ensure_daemon
-  CLI="$BASE/bin/skylight"
 fi
 TSX="$TS_DIR/node_modules/.bin/tsx"
 
@@ -60,8 +67,13 @@ socket_live() {
 }
 
 ensure_deps() {
-  # Lazy npm install works in both layouts (the keg's libexec is user-writable;
-  # node comes from the user's environment, not a brew dependency).
+  if [ "$INSTALLED" = 1 ] && [ ! -d "$TS_DIR" ]; then
+    # First run of this version: stage the client outside the bundle, then
+    # install its deps with the user's node (not a brew dependency, so an
+    # nvm-managed node keeps working).
+    mkdir -p "$(dirname "$TS_DIR")"
+    cp -R "$TS_SRC" "$TS_DIR.tmp.$$" && mv "$TS_DIR.tmp.$$" "$TS_DIR"
+  fi
   [ -x "$TSX" ] || (cd "$TS_DIR" && npm install --silent) || die "npm install failed in $TS_DIR"
   if [ "$INSTALLED" = 0 ] && [ ! -x "$DAEMON" ]; then
     echo "skylight-run: building daemon..." >&2
@@ -76,12 +88,10 @@ ensure_daemon() {
   if [ "$INSTALLED" = 1 ]; then
     # Installed mode never spawns a terminal-child daemon: TCC grants belong
     # to the launchd-launched SkylightService.app, and a shell-spawned copy
-    # would run permission-less. Kick the agent instead.
-    [ -f "$HOME/Library/LaunchAgents/$AGENT_LABEL.plist" ] \
-      || die "launch agent not installed — run 'skylight-install'"
-    launchctl kickstart "gui/$(id -u)/$AGENT_LABEL" 2>/dev/null \
-      || launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$AGENT_LABEL.plist" \
-      || die "cannot start $AGENT_LABEL via launchctl — check $LOG"
+    # would run permission-less. `skylight start` kicks the LaunchAgent (and
+    # says how to register it if that never happened). stderr only: in --mcp
+    # mode stdout is the transport.
+    "$CLI" start >&2 || die "cannot start $AGENT_LABEL — see above and ~/Library/Logs/skylight/service.log"
   else
     echo "skylight-run: starting SkylightService${SKYLIGHT_BACKGROUND:+ (background mode)}..." >&2
     # Detached so it survives this shell; dev-flow launch is fine for TCC here
@@ -105,6 +115,11 @@ case "${1:-}" in
     ;;
   --stop)
     pkill -TERM -f SkylightService 2>/dev/null && echo "stopped" || echo "not running"
+    exit 0
+    ;;
+  --ts-dir)
+    ensure_deps
+    echo "$TS_DIR"
     exit 0
     ;;
   --mcp)
