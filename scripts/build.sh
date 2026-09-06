@@ -101,7 +101,7 @@ echo "==> Zip created at ${ZIP_PATH}"
 if [ -n "${NOTARY_PASSWORD:-}" ] && [ -n "${SIGN_IDENTITY}" ]; then
     NOTARY_ARGS="--apple-id ${APPLE_ID} --team-id ${APPLE_TEAM_ID} --password ${NOTARY_PASSWORD}"
     echo "==> Notarizing DMG..."
-    DMG_RESULT=$(xcrun notarytool submit "${DMG_PATH}" ${NOTARY_ARGS} --wait 2>&1) || true
+    DMG_RESULT=$(xcrun notarytool submit "${DMG_PATH}" ${NOTARY_ARGS} --wait --timeout 30m 2>&1) || true
     echo "${DMG_RESULT}"
     DMG_ID=$(echo "${DMG_RESULT}" | grep "id:" | head -1 | awk '{print $2}')
     if ! echo "${DMG_RESULT}" | grep -q "status: Accepted"; then
