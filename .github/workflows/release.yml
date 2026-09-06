@@ -38,7 +38,7 @@ jobs:
 
       - name: Detect signing identity
         id: identity
-        run: echo "identity=$(security find-identity -v -p codesigning build.keychain | head -1 | sed 's/.*"\(.*\)".*/\1/')" >> "$GITHUB_OUTPUT"
+        run: echo "identity=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')" >> "$GITHUB_OUTPUT"
 
       - name: Build, sign, and notarize
         env:
