@@ -5,6 +5,7 @@
     <key>CFBundleIdentifier</key><string>com.skylight.SkylightService</string>
     <key>CFBundleName</key><string>SkylightService</string>
     <key>CFBundleExecutable</key><string>SkylightService</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.0.0</string>
     <key>CFBundleVersion</key><string>0.0.0</string>

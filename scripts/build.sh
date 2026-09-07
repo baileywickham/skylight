@@ -40,6 +40,7 @@ swift build -c release --product skylight
 #   Contents/MacOS/SkylightService        daemon (launchd runs this)
 #   Contents/MacOS/skylight               CLI; Bundle.main == the .app, which is
 #                                         what SMAppService needs for `register`
+#   Contents/Resources/AppIcon.icns       app icon
 #   Contents/Resources/bin/skylight-run   driver/MCP wrapper (shell)
 #   Contents/Resources/ts/                @skylight/sky client source (no
 #                                         node_modules; installed on first run
@@ -54,6 +55,7 @@ cp ".build/release/skylight"        "${APP_BUNDLE}/Contents/MacOS/skylight"
 cp scripts/skylight-run             "${APP_BUNDLE}/Contents/Resources/bin/skylight-run"
 cp packaging/${BUNDLE_ID}.plist     "${APP_BUNDLE}/Contents/Library/LaunchAgents/"
 cp packaging/Info.plist             "${APP_BUNDLE}/Contents/Info.plist"
+cp packaging/icon/AppIcon.icns      "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "${APP_BUNDLE}/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION}" "${APP_BUNDLE}/Contents/Info.plist"
 GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
