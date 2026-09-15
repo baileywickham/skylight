@@ -112,6 +112,12 @@ Dev install from a checkout: `scripts/install-local.sh` (same build, local
 Developer ID / Apple Development identity, no notarization, `/Applications`).
 Never run the daemon as a terminal child in installed mode: TCC keys the grants
 to the launchd-launched .app.
+Upgrades: brew's `uninstall launchctl:` boots the agent out, and the postflight
+`register` that follows can fail transiently (`SMAppServiceErrorDomain` 57), which
+used to leave the daemon down with BTM still reporting `enabled`. `--register`
+therefore retries until launchd actually has the agent (`launchctl print`), and
+`skylight start` re-registers when kickstart can't find it. The CLI resolves its
+.app from the real executable path, since it runs via a brew-bin symlink.
 
 ## Conventions & gotchas (learned the hard way — don't regress these)
 

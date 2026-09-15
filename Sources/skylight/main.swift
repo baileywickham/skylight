@@ -19,6 +19,7 @@ func doctor() {
     print("  spaces:           \(caps.space_management ? "available" : "UNAVAILABLE (bring_to_active_space disabled)")")
     let background = cliBackgroundSettings()
     print("  background:       \(background.mode().mode.rawValue) → actions default to \(background.resolvedDefault() ? "background" : "foreground") ('skylight background on|off|auto')")
+    print("  bundle:           \(insideBundle ? bundleURL.path : "not inside SkylightService.app (dev build)")")
     let live = Permissions.socketIsLive(at: SkylightPaths.socketPath)
     print("  socket:           \(live ? "live" : "not listening") at \(SkylightPaths.socketPath)")
     if !live { print("  -> run 'skylight start'") }
@@ -69,7 +70,18 @@ let agentPlist = "\(agentLabel).plist"
 /// honours SMAppService calls from the bundle's main executable, so this CLI
 /// (a second Mach-O in Contents/MacOS) delegates rather than calling
 /// SMAppService itself.
-var bundleURL: URL { Bundle.main.bundleURL }
+///
+/// Derived from the resolved executable path, not `Bundle.main.bundleURL`: the
+/// cask links this CLI into brew's bin, and for a symlinked executable
+/// Bundle.main takes the symlink's directory (/opt/homebrew/bin) as the bundle,
+/// so `skylight register`/`start` from PATH thought they were outside the .app.
+var bundleURL: URL {
+    guard let executable = Bundle.main.executableURL?.resolvingSymlinksInPath() else {
+        return Bundle.main.bundleURL
+    }
+    // <bundle>.app/Contents/MacOS/skylight
+    return executable.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+}
 var daemonURL: URL { bundleURL.appendingPathComponent("Contents/MacOS/SkylightService") }
 
 var insideBundle: Bool {
@@ -140,6 +152,18 @@ func unregister() {
     print("LaunchAgent \(agentLabel) unregistered")
 }
 
+/// `launchctl kickstart` for the agent; false when launchd doesn't have it.
+@discardableResult
+func kickstart(quiet: Bool) -> Bool {
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+    task.arguments = ["kickstart", "gui/\(getuid())/\(agentLabel)"]
+    if quiet { task.standardError = FileHandle.nullDevice }
+    guard (try? task.run()) != nil else { return false }
+    task.waitUntilExit()
+    return task.terminationStatus == 0
+}
+
 func start() {
     if Permissions.socketIsLive(at: SkylightPaths.socketPath) {
         print("SkylightService already running (socket live).")
@@ -152,11 +176,14 @@ func start() {
         print("  -> run 'skylight register'")
         exit(1)
     }
-    let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-    task.arguments = ["kickstart", "gui/\(getuid())/\(agentLabel)"]
-    try? task.run()
-    task.waitUntilExit()
+    if !kickstart(quiet: true) && insideBundle {
+        // SMAppService can report the agent enabled while launchd has no such
+        // service — what a cask upgrade leaves behind if its postflight
+        // register failed. Registering again loads it.
+        print("LaunchAgent \(agentLabel) is not loaded in launchd; re-registering...")
+        _ = agentControl("--register")
+        kickstart(quiet: false)
+    }
     for _ in 0..<20 {
         if Permissions.socketIsLive(at: SkylightPaths.socketPath) {
             print("SkylightService started; socket live at \(SkylightPaths.socketPath)")
