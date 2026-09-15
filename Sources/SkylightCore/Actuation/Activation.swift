@@ -4,10 +4,11 @@ import Foundation
 
 /// CGEvent keyboard/mouse events posted to the session tap land in the
 /// FRONTMOST app — which, when Claude runs `tsx` from the Bash tool, is the
-/// terminal. So in the default (foreground) mode, before keyboard or
-/// coordinate actions: activate the target app, raise the window, and wait.
+/// terminal. So in foreground mode, before keyboard or coordinate actions:
+/// activate the target app, raise the window, and wait.
 ///
-/// Background mode (`SKYLIGHT_BACKGROUND=1` on the daemon) skips this call
+/// Background mode (the default wherever focus-without-raise resolved; see
+/// `BackgroundSettings`) skips this call
 /// entirely, delivering synthetic events per-pid (see `eventDestination`) after
 /// making the target AppKit-active without raising it (see
 /// `focusWithoutRaise`). That pairing is what removed the original caveat:
@@ -153,14 +154,14 @@ public enum ActuatorAction: Equatable {
 
 /// Where a synthesized CGEvent is delivered.
 public enum EventDestination: Equatable {
-    /// Session-wide HID tap — the event lands in the frontmost app (default).
+    /// Session-wide HID tap — the event lands in the frontmost app (foreground).
     case session
     /// Directly into one app's event queue via CGEventPostToPid, regardless of
     /// which app is frontmost (background mode).
     case pid(pid_t)
 }
 
-/// Foreground (default) mode activates the target before every action so
+/// Foreground mode activates the target before every action so
 /// session-tap events land in it and post-action screenshots are unobscured.
 /// Background mode never activates: AX element actions (press/set-value/
 /// select-range) deliver straight to the element without focus, and synthetic

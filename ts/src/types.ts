@@ -65,7 +65,13 @@ export interface CapabilitiesResult {
   version: string;
   permissions: PermissionStatus;
   skylight: SkyLightCapabilities;
-  /** Daemon-wide default for `background` (SKYLIGHT_BACKGROUND). */
+  /**
+   * The configured default: "auto" (background wherever focus_without_raise is
+   * available — the built-in default), "on", or "off". Set with
+   * `skylight background on|off|auto`.
+   */
+  background_mode: "auto" | "on" | "off";
+  /** What `background_mode` resolves to now: the effective value for an action that omits `background`. */
   background_default: boolean;
   /**
    * Actions against DIFFERENT apps may run concurrently. Requests for one app
@@ -203,7 +209,7 @@ export interface ClickInput {
   display_id?: number;
   mouse_button?: MouseButton;
   click_count?: number;
-  /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
+  /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
   background?: boolean;
 }
 
@@ -212,7 +218,7 @@ export interface PressKeyInput {
   app?: AppIdentifier;
   /** "+"-separated chord of X-keysym-style names, e.g. "Ctrl+Shift+t". */
   keys: string;
-  /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
+  /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
   background?: boolean;
 }
 
@@ -220,7 +226,7 @@ export interface TypeTextInput {
   /** Default: the frontmost app. */
   app?: AppIdentifier;
   text: string;
-  /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
+  /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
   background?: boolean;
 }
 
@@ -229,7 +235,7 @@ export interface ScrollInput {
   element_index: number;
   direction: Direction;
   pages: number;
-  /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
+  /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
   background?: boolean;
 }
 
@@ -237,7 +243,7 @@ export interface SetValueInput {
   app: AppIdentifier;
   element_index: number;
   value: string;
-  /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
+  /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
   background?: boolean;
 }
 
@@ -252,7 +258,7 @@ export interface DragInput {
   /** Interpret coordinates as pixels of the latest `screenshot` of this display. */
   display_id?: number;
   mouse_button?: MouseButton;
-  /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
+  /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
   background?: boolean;
 }
 
@@ -261,7 +267,7 @@ export interface PerformSecondaryActionInput {
   element_index: number;
   /** AX action name, e.g. "AXShowMenu". */
   action: string;
-  /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
+  /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
   background?: boolean;
 }
 
@@ -272,6 +278,6 @@ export interface SelectTextInput {
   prefix?: string;
   suffix?: string;
   selection_type: SelectTextSelectionType;
-  /** Per-request background override: true = act without stealing focus (AX-index actions reliable; coordinates/keys best-effort). Absent = daemon default. */
+  /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
   background?: boolean;
 }

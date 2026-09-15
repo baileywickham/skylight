@@ -16,9 +16,10 @@
 #   skylight-run --mcp              serve Skylight as an MCP server on stdio
 #                                   (claude mcp add skylight -- skylight-run --mcp)
 #
-# SKYLIGHT_BACKGROUND=1 skylight-run ...  starts the daemon (if not already
-# running) in no-focus-steal mode. Only applies at daemon start; --stop first
-# to switch modes.
+# Actions run in the background (no focus steal) by default; switch with
+# `skylight background on|off|auto` (applies to the next request, no restart).
+# SKYLIGHT_BACKGROUND=0|1 in the daemon's environment is only the fallback when
+# no settings file exists; a dev daemon inherits it at start, so --stop first.
 set -euo pipefail
 
 # Two layouts, detected by whether this script sits inside SkylightService.app:

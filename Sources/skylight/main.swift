@@ -17,11 +17,48 @@ func doctor() {
     }
     print("  trusted events:   \(caps.trusted_events ? "enabled" : "off (experimental; SKYLIGHT_TRUSTED_EVENTS=1)")")
     print("  spaces:           \(caps.space_management ? "available" : "UNAVAILABLE (bring_to_active_space disabled)")")
+    let background = cliBackgroundSettings()
+    print("  background:       \(background.mode().mode.rawValue) → actions default to \(background.resolvedDefault() ? "background" : "foreground") ('skylight background on|off|auto')")
     let live = Permissions.socketIsLive(at: SkylightPaths.socketPath)
     print("  socket:           \(live ? "live" : "not listening") at \(SkylightPaths.socketPath)")
     if !live { print("  -> run 'skylight start'") }
     print("  note: grants shown here are for THIS process; the daemon's own doctor state")
     print("        is authoritative once SkylightService.app is installed and running.")
+}
+
+/// The CLI reads the settings file only: SKYLIGHT_BACKGROUND in THIS shell is
+/// not the daemon's environment, so reporting it here would mislead.
+func cliBackgroundSettings() -> BackgroundSettings {
+    BackgroundSettings(environment: [:])
+}
+
+/// `skylight background [on|off|auto]` — show or set the daemon's default for
+/// actions that don't pass `background`. The daemon re-reads the file on every
+/// request, so a change applies immediately.
+func background(_ arg: String?) {
+    let settings = cliBackgroundSettings()
+    if let arg {
+        guard let mode = BackgroundMode(parsing: arg) else {
+            print("usage: skylight background [on|off|auto]")
+            exit(2)
+        }
+        do { try settings.save(mode) } catch {
+            print("error: cannot write \(settings.fileURL.path): \(error)")
+            exit(1)
+        }
+    }
+    let (mode, source) = settings.mode()
+    let effective = settings.resolvedDefault()
+    print("background mode: \(mode.rawValue)\(source == .settingsFile ? "" : " (default)")")
+    print("  actions default to \(effective ? "background: no activation, no raise, cursor untouched" : "foreground: activate + raise the app first")")
+    if mode == .auto && !effective {
+        print("  -> focus-without-raise is unavailable on this macOS build, so auto stays foreground;")
+        print("     'skylight background on' forces background anyway (menu shortcuts may not fire)")
+    }
+    if source != .settingsFile {
+        print("  (SKYLIGHT_BACKGROUND in the daemon's environment, if set, overrides this default)")
+    }
+    if arg != nil { print("  saved to \(settings.fileURL.path); applies to the next request, no restart needed") }
 }
 
 let agentLabel = "com.skylight.SkylightService"
@@ -152,10 +189,12 @@ func usage() {
     MCP: `skylight-run --mcp` serves all of this as tools over stdio
     (claude mcp add --scope user skylight -- skylight-run --mcp).
 
-    Background mode: pass background: true on any action to act without stealing
-    focus (reliable for element_index actions; best-effort for coordinate clicks
-    and keyboard — menu shortcuts like Cmd+c need frontmost). Or start the daemon
-    with SKYLIGHT_BACKGROUND=1 to make that the default.
+    Background: actions run without activating or raising the app by default,
+    so you keep working while the agent drives other apps (and actions on
+    different apps run in parallel). 'skylight background on|off|auto' sets the
+    default (auto = background wherever this macOS build supports
+    focus-without-raise); pass background: false on a call to bring the app
+    to the front for it.
 
     Approvals: 'skylight approve <app>' switches actuation to an allowlist
     ('skylight approvals' to inspect, 'skylight allow-all' to reset). Unlisted
@@ -218,7 +257,8 @@ case "approve":
     }
     approve(name)
 case "allow-all": allowAll()
+case "background": background(CommandLine.arguments.dropFirst(2).first)
 default:
-    print("usage: skylight <start|register|unregister|doctor|usage|approvals|approve <app>|allow-all>")
+    print("usage: skylight <start|register|unregister|doctor|usage|approvals|approve <app>|allow-all|background [on|off|auto]>")
     exit(2)
 }

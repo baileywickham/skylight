@@ -230,7 +230,10 @@ public struct CapabilitiesResult: Codable, Equatable {
     public let version: String
     public let permissions: PermissionStatus
     public let skylight: SkyLightCapabilities
-    /// Daemon-wide default for the `background` flag (SKYLIGHT_BACKGROUND).
+    /// The configured mode: "auto" | "on" | "off" (see `BackgroundMode`).
+    public let background_mode: String
+    /// What `background_mode` resolves to right now: the effective value for
+    /// a request that sets no `background` field.
     public let background_default: Bool
     /// True when actions against DIFFERENT apps can run concurrently. Requests
     /// for one app are always serialized, and foreground actions always run
@@ -238,10 +241,11 @@ public struct CapabilitiesResult: Codable, Equatable {
     public let parallel_actuation: Bool
 
     public init(version: String, permissions: PermissionStatus, skylight: SkyLightCapabilities,
-                background_default: Bool, parallel_actuation: Bool) {
+                background_mode: String, background_default: Bool, parallel_actuation: Bool) {
         self.version = version
         self.permissions = permissions
         self.skylight = skylight
+        self.background_mode = background_mode
         self.background_default = background_default
         self.parallel_actuation = parallel_actuation
     }
@@ -286,7 +290,7 @@ public struct ClickInput: Codable, Equatable {
     public let mouse_button: String?   // "left" | "right" | "middle"
     public let click_count: Int?
     /// Per-request background override: true = never activate / post per-pid,
-    /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
+    /// false = force activation, absent = daemon default (`skylight background`).
     public let background: Bool?
     public init(app: String? = nil, element_index: Int? = nil, x: Double? = nil, y: Double? = nil,
                 display_id: Int? = nil, mouse_button: String? = nil, click_count: Int? = nil,
@@ -307,7 +311,7 @@ public struct PressKeyInput: Codable, Equatable {
     public let app: String?
     public let keys: String            // "+"-separated chord, e.g. "Ctrl+Shift+t"
     /// Per-request background override: true = never activate / post per-pid,
-    /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
+    /// false = force activation, absent = daemon default (`skylight background`).
     public let background: Bool?
     public init(app: String? = nil, keys: String, background: Bool? = nil) {
         self.app = app
@@ -321,7 +325,7 @@ public struct TypeTextInput: Codable, Equatable {
     public let app: String?
     public let text: String
     /// Per-request background override: true = never activate / post per-pid,
-    /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
+    /// false = force activation, absent = daemon default (`skylight background`).
     public let background: Bool?
     public init(app: String? = nil, text: String, background: Bool? = nil) {
         self.app = app
@@ -336,7 +340,7 @@ public struct ScrollInput: Codable, Equatable {
     public let direction: String       // "up" | "down" | "left" | "right"
     public let pages: Double
     /// Per-request background override: true = never activate / post per-pid,
-    /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
+    /// false = force activation, absent = daemon default (`skylight background`).
     public let background: Bool?
     public init(app: String, element_index: Int, direction: String, pages: Double, background: Bool? = nil) {
         self.app = app
@@ -352,7 +356,7 @@ public struct SetValueInput: Codable, Equatable {
     public let element_index: Int
     public let value: String
     /// Per-request background override: true = never activate / post per-pid,
-    /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
+    /// false = force activation, absent = daemon default (`skylight background`).
     public let background: Bool?
     public init(app: String, element_index: Int, value: String, background: Bool? = nil) {
         self.app = app
@@ -374,7 +378,7 @@ public struct DragInput: Codable, Equatable {
     public let display_id: Int?
     public let mouse_button: String?
     /// Per-request background override: true = never activate / post per-pid,
-    /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
+    /// false = force activation, absent = daemon default (`skylight background`).
     public let background: Bool?
     public init(app: String? = nil, from_x: Double, from_y: Double, to_x: Double, to_y: Double,
                 display_id: Int? = nil, mouse_button: String? = nil, background: Bool? = nil) {
@@ -394,7 +398,7 @@ public struct PerformSecondaryActionInput: Codable, Equatable {
     public let element_index: Int
     public let action: String          // AX action name, e.g. "AXShowMenu"
     /// Per-request background override: true = never activate / post per-pid,
-    /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
+    /// false = force activation, absent = daemon default (`skylight background`).
     public let background: Bool?
     public init(app: String, element_index: Int, action: String, background: Bool? = nil) {
         self.app = app
@@ -412,7 +416,7 @@ public struct SelectTextInput: Codable, Equatable {
     public let suffix: String?
     public let selection_type: String  // "select" | "cursor_before" | "cursor_after"
     /// Per-request background override: true = never activate / post per-pid,
-    /// false = force activation, absent = daemon default (SKYLIGHT_BACKGROUND).
+    /// false = force activation, absent = daemon default (`skylight background`).
     public let background: Bool?
     public init(app: String, element_index: Int, text: String, prefix: String? = nil,
                 suffix: String? = nil, selection_type: String, background: Bool? = nil) {

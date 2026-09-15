@@ -21,6 +21,10 @@ public enum SkylightPaths {
     public static var shotsDir: URL {
         supportDir.appendingPathComponent("shots")
     }
+    /// Daemon settings (`skylight background`); absent file = built-in defaults.
+    public static var settingsFile: URL {
+        supportDir.appendingPathComponent("settings.json")
+    }
     /// Per-app actuation allowlist; absent file = allow_all (opt-in gate).
     public static var approvalsFile: URL {
         supportDir.appendingPathComponent("approvals.json")

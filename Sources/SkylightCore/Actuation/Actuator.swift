@@ -51,16 +51,18 @@ public final class Actuator {
     private let capture: AXCapture
     private let postActionSleepMs: Int
     private let pauseFile: URL
-    /// Daemon-wide default (SKYLIGHT_BACKGROUND=1). Each action may override
-    /// per request via its optional `background` field.
-    private let defaultBackground: Bool
+    /// Daemon-wide default (see `BackgroundSettings`). Each action may
+    /// override per request via its optional `background` field. A closure so
+    /// the daemon re-resolves it per request and `skylight background` applies
+    /// without a restart.
+    private let defaultBackground: () -> Bool
     private let approvals: Approvals
     /// Latest `screenshot` geometry per display, for click/drag with display_id.
     private let displayGeometry: DisplayGeometryStore
 
     public init(registry: AppRegistry, capture: AXCapture,
                 postActionSleepMs: Int = 100, pauseFile: URL = SkylightPaths.pauseFile,
-                background: Bool = false, approvals: Approvals = Approvals(),
+                background: @escaping @autoclosure () -> Bool = false, approvals: Approvals = Approvals(),
                 displayGeometry: DisplayGeometryStore = DisplayGeometryStore()) {
         self.registry = registry
         self.capture = capture
@@ -73,7 +75,7 @@ public final class Actuator {
 
     /// Per-request override wins; absent falls back to the daemon default.
     public func effectiveBackground(_ override: Bool?) -> Bool {
-        override ?? defaultBackground
+        override ?? defaultBackground()
     }
 
     // MARK: - Shared plumbing
@@ -206,7 +208,7 @@ public final class Actuator {
 
     /// Readies the target for an action.
     ///
-    /// Foreground (default): bring it frontmost so session events land in it
+    /// Foreground: bring it frontmost so session events land in it
     /// and post-action screenshots are unobscured.
     ///
     /// Background: never raise. Actions that deliver synthetic events also need
@@ -249,12 +251,10 @@ public final class Actuator {
         usleep(5_000)
     }
 
-    /// Delivers a synthetic event. Default: session HID tap (frontmost app).
-    /// Background mode: CGEventPostToPid into `pid`'s event queue, so the
-    /// event reaches the target even while another app holds focus. Caveats
-    /// (best-effort, see Activation.swift): menu key equivalents usually won't
-    /// fire in a non-frontmost app, and Chromium/Electron apps can mishandle
-    /// input while inactive.
+    /// Delivers a synthetic event. Foreground: session HID tap (frontmost
+    /// app). Background: CGEventPostToPid into `pid`'s event queue, so the
+    /// event reaches the target even while another app holds focus (menu
+    /// equivalents fire because `prepareTarget` ran focusWithoutRaise first).
     private func post(_ event: CGEvent?, pid: pid_t, background: Bool) {
         switch eventDestination(background: background, targetPid: pid) {
         case .session: event?.post(tap: .cghidEventTap)

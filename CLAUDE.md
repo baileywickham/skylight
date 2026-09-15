@@ -26,6 +26,8 @@ or `{"id":n,"ok":false,"error":{"code":"<slug>","message":"..."}}`.
 ## Layout
 
 - `Sources/SkylightCore/` — the library (all logic, unit-tested):
+  - `BackgroundMode.swift` — `auto|on|off` default + `BackgroundSettings`
+    (`settings.json` > `SKYLIGHT_BACKGROUND` > `auto`).
   - `Clipboard.swift` — general pasteboard read/write (main-queue hop).
   - `IPC/` — `IPCServer` (0600 socket, per-request timeout, SIGPIPE-safe),
     `ActuationScheduler` (admission control: per-app keys run in parallel,
@@ -47,7 +49,7 @@ or `{"id":n,"ok":false,"error":{"code":"<slug>","message":"..."}}`.
   - `Geometry/CoordinateModel`, `AppRegistry`, `Permissions`, `Paths`, `AuditLog`.
 - `Sources/SkylightService/main.swift` — the daemon: registers all methods, owns
   the run loop, audit log, kill switch.
-- `Sources/skylight/main.swift` — the `skylight` CLI (`doctor`, `start`, `register`/`unregister`, approvals, usage).
+- `Sources/skylight/main.swift` — the `skylight` CLI (`doctor`, `start`, `register`/`unregister`, approvals, `background`, usage).
 - `ts/` — the `@skylight/sky` client (`src/client.ts`, `src/types.ts`,
   `sky.d.ts`) + tests, and `src/mcp.ts`, the MCP server (`skylight-run --mcp`)
   that exposes every method as a tool. `packaging/` (Info.plist + LaunchAgent), `scripts/`
@@ -124,9 +126,12 @@ to the launchd-launched .app.
   keycodes via `UCKeyTranslate` for the active layout — the QWERTY table is wrong
   on **Dvorak** (Cmd+C would post Cmd+J) — and posts real held `flagsChanged`
   modifier events so NSMenu equivalents (Cmd+C/V) actually fire.
-- **Activation vs focus:** by default actions are activation-first (window comes
-  to front). `SKYLIGHT_BACKGROUND=1` makes the daemon act **without stealing
-  focus**: AX-index actions skip activation entirely, and event-delivering
+- **Activation vs focus:** actions run in the **background by default**. A request
+  without `background` resolves through `BackgroundSettings`: `settings.json`
+  (`skylight background on|off|auto`, re-read per request, no restart) >
+  `SKYLIGHT_BACKGROUND` > `auto`, which is background wherever focus-without-raise
+  resolved and foreground (activation-first) otherwise. Background means the
+  daemon acts **without stealing focus**: AX-index actions skip activation entirely, and event-delivering
   actions (coordinate click, keys, typing, scroll, drag) first run
   `focusWithoutRaise` — private `SLPSPostEventRecordTo` records that make the
   app AppKit-active and its window key **without raising it**, so menu
@@ -199,7 +204,7 @@ to the launchd-launched .app.
 ## API methods
 
 `capabilities` (TCC grants + which private SkyLight capabilities resolved +
-`background_default`/`parallel_actuation` — check this before assuming
+`background_mode`/`background_default`/`parallel_actuation` — check this before assuming
 background mode is fully reliable on a given macOS build),
 `list_apps` (regular apps; `include_menu_bar_apps` adds accessory/LSUIElement
 apps tagged `menu_bar_only` — always resolvable by name regardless),
@@ -211,8 +216,8 @@ root over the status item + open popover — see `AX/MenuBarApp.swift` for the
 popover's key-status-dependent attachment quirk), `click` (element_index OR x/y),
 `press_key`, `type_text`,
 `scroll`, `set_value`, `drag`, `perform_secondary_action`, `select_text`, plus
-`ping`/`echo`. Every action takes optional `background: true` (per-request
-no-focus-steal override). Pixel path: `list_displays`, `screenshot` (whole
+`ping`/`echo`. Every action takes optional `background` (per-request override of the
+daemon default; `false` activates the app first). Pixel path: `list_displays`, `screenshot` (whole
 display, default 1 px/pt, `max_dimension` cap, cursor shown), `zoom` (native
 crop of a region of the latest screenshot), and `click`/`drag` with
 `display_id`. Also `read_clipboard`/`write_clipboard` (not app-scoped, so not

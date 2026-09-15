@@ -58,7 +58,7 @@ function displayShotContent(shot: DisplayScreenshot, kind: "screenshot" | "zoom"
 
 const app = z.string().describe("App name (e.g. \"Notes\") or bundle id (e.g. \"com.apple.Notes\").");
 const background = z.boolean().optional().describe(
-  "Act without stealing focus or moving the cursor. element_index actions are fully reliable this way; coordinate/keyboard input is near-reliable (menu shortcuts fire via focus-without-raise).",
+  "Override the daemon default for this call. Actions already run in the background by default (app not raised, the user's focus and cursor untouched; see capabilities.background_default). Pass false only when the app must come to the front.",
 );
 const displayId = z.number().int().optional().describe("Display id from list_displays. Default: the main display.");
 
@@ -69,14 +69,14 @@ const server = new McpServer(
       "Skylight drives native macOS apps. Preferred loop: get_app_state (indexed accessibility tree + screenshot) → act by element_index → get_app_state again to verify.",
       "For anything without a usable accessibility tree, or to see the whole desktop: screenshot → click/drag with display_id and the pixel coordinates you read off that image → zoom to read small text.",
       "Coordinates are ALWAYS pixels of the most recent image of that target (window capture per app, screenshot per display); the daemon converts them.",
-      "Pass background: true to act without raising the app; background actions on different apps run in parallel.",
+      "Actions run in the background by default: the target app is not raised and the user's focus and cursor are untouched, so they can keep working. Actions on different apps run in parallel. Pass background: false only when the app must come to the front.",
       "Apps may be gated by an allowlist (approval_required): tell the user to run `skylight approve \"<App>\"`.",
     ].join("\n"),
   },
 );
 
 server.registerTool("capabilities", {
-  description: "What this daemon can do on this Mac: TCC grants, private-symbol availability (focus without raise, Spaces), background default, parallel actuation.",
+  description: "What this daemon can do on this Mac: TCC grants, private-symbol availability (focus without raise, Spaces), background mode and its effective default, parallel actuation.",
   annotations: { readOnlyHint: true },
 }, () => run(async () => text(await sky.capabilities())));
 

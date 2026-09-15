@@ -49,16 +49,17 @@ let env = ProcessInfo.processInfo.environment
 let shotsDir = env["SKYLIGHT_SHOTS_DIR"].map { URL(fileURLWithPath: $0) }
     ?? SkylightPaths.shotsDir
 let postActionSleepMs = env["SKYLIGHT_POST_ACTION_SLEEP_MS"].flatMap(Int.init) ?? 100
-// SKYLIGHT_BACKGROUND=1: run actions without stealing focus — activation is
-// skipped for every action and synthetic events are posted per-pid
-// (CGEventPostToPid) instead of to the session tap. Default OFF preserves the
-// activation-first behavior exactly. See Actuation/Activation.swift for the
-// best-effort caveats on keyboard/coordinate input to non-frontmost apps.
-let background = ["1", "true", "yes"].contains((env["SKYLIGHT_BACKGROUND"] ?? "").lowercased())
+// Background by default: actions skip activation and post synthetic events
+// per-pid after focusWithoutRaise, so the user's frontmost app, window order,
+// and cursor are left alone. A request's `background` field wins; otherwise
+// settings.json (`skylight background on|off|auto`) > SKYLIGHT_BACKGROUND >
+// `auto` (background wherever focus-without-raise resolved). Re-read per
+// request, so switching modes needs no restart.
+let backgroundSettings = BackgroundSettings()
 let displayGeometry = DisplayGeometryStore()
 let screenshotter = Screenshotter(shotsDir: shotsDir, displayGeometry: displayGeometry)
 let actuator = Actuator(registry: registry, capture: axCapture,
-                        postActionSleepMs: postActionSleepMs, background: background,
+                        postActionSleepMs: postActionSleepMs, background: backgroundSettings.resolvedDefault(),
                         approvals: Approvals(), displayGeometry: displayGeometry)
 
 /// Wraps a throwing handler: SkyServiceError → structured error response,
@@ -120,7 +121,8 @@ router.register("capabilities", handle("capabilities", EmptyParams.self) { _ in
     CapabilitiesResult(version: SkylightVersion.current,
                        permissions: Permissions.status(),
                        skylight: SkyLightBridge.capabilities(),
-                       background_default: background,
+                       background_mode: backgroundSettings.mode().mode.rawValue,
+                       background_default: actuator.effectiveBackground(nil),
                        parallel_actuation: true)
 })
 router.register("list_apps", handle("list_apps", ListAppsInput.self) { input in
@@ -278,8 +280,9 @@ let server = IPCServer(socketPath: SkylightPaths.socketPath,
                        classify: classifyRequest, handler: router.route)
 do {
     try server.start()
-    let mode = background ? " (background mode: actions will not steal focus)" : ""
-    FileHandle.standardError.write(Data("SkylightService \(SkylightVersion.current) listening at \(SkylightPaths.socketPath)\(mode)\n".utf8))
+    let (mode, source) = backgroundSettings.mode()
+    let effective = backgroundSettings.resolvedDefault() ? "background" : "foreground"
+    FileHandle.standardError.write(Data("SkylightService \(SkylightVersion.current) listening at \(SkylightPaths.socketPath) (actions default to \(effective): background_mode=\(mode.rawValue) from \(source.rawValue))\n".utf8))
 } catch {
     FileHandle.standardError.write(Data("fatal: \(error)\n".utf8))
     exit(1)

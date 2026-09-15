@@ -57,7 +57,7 @@ All methods take `app` (app name, e.g. `"Finder"`). Full types: `$(skylight-run 
 | `read_clipboard` / `write_clipboard` | — / `text` |
 | `bring_to_active_space` | `app`, `window_id?` — move a window to the current Space without switching |
 
-Every action (`click`, `press_key`, `type_text`, `scroll`, `set_value`, `drag`, `perform_secondary_action`, `select_text`) also accepts `background?: true`.
+Every action (`click`, `press_key`, `type_text`, `scroll`, `set_value`, `drag`, `perform_secondary_action`, `select_text`) also accepts `background?: boolean` — background is already the default; `false` brings the app to the front first.
 
 ## Pixel path (no AX tree, or the whole desktop)
 
@@ -89,35 +89,37 @@ Coordinates are always pixels of the most recent image of that target (per-app w
 
 ## Background & parallel work
 
-`background: true` on any action drives the app **without raising it or moving the
-user's cursor** — they keep working while you do. Menu shortcuts (`Cmd+s`) fire
-correctly in background mode: the daemon makes the app AppKit-active without
-raising the window.
+Actions run **in the background by default**: the daemon drives the app **without
+raising it or moving the user's cursor**, so they keep working while you do. Menu
+shortcuts (`Cmd+s`) still fire: the daemon makes the app AppKit-active without
+raising the window. Pass `background: false` only when the app has to come to the
+front (e.g. the user wants to watch).
 
-Background actions against **different apps run in parallel**, so fan out with
-`Promise.all` when the work is independent:
+Actions against **different apps run in parallel**, so fan out with `Promise.all`
+when the work is independent:
 
 ```ts
 await Promise.all([
-  sky.type_text({ app: "Notes", text: "draft", background: true }),
-  sky.click({ app: "Safari", element_index: 12, background: true }),
+  sky.type_text({ app: "Notes", text: "draft" }),
+  sky.click({ app: "Safari", element_index: 12 }),
 ]);
 ```
 
 Rules:
 - Two calls against the **same app** are serialized automatically — safe, just not faster.
-- **Foreground** actions (the default) always run alone, so mixing them into a
-  `Promise.all` serializes the whole batch. Set `background: true` on all of them.
+- **Foreground** actions (`background: false`) always run alone, so one of them in a
+  `Promise.all` serializes the whole batch.
 - Capture first (`get_app_state` per app) so each app has geometry and indices.
-- Check `sky.capabilities()` if background input misbehaves: `skylight.focus_without_raise:
-  false` means this macOS build dropped the private symbols and background mode has
-  fallen back to best-effort (menu shortcuts may not fire).
+- `sky.capabilities().background_default: false` means the default is foreground:
+  either the user ran `skylight background off`, or `background_mode` is `auto` on a
+  macOS build where `skylight.focus_without_raise` is false (background key input
+  would be best-effort there). Don't force `background: true` without telling the user.
 - Chromium apps: background right-click on **web content** gets coerced to
   left-click; use `perform_secondary_action` with `AXShowMenu` instead.
 
 ## Gotchas
 
-- Actions activate the target app (steals focus) by default. Pass `background: true` on any action to work without stealing focus — see "Background & parallel work" below.
+- Actions don't steal focus by default — see "Background & parallel work" above. `background: false` activates the app first; the user sets the default with `skylight background on|off|auto`.
 - If an action fails `approval_required`: the actuation allowlist is on — `skylight approve "<App>"` (`skylight` is on PATH with the cask), or `skylight allow-all` to disable the gate.
 - Coordinates are **screenshot pixels**, not screen points — take them from the screenshot you just captured.
 - `type_text` types at the current focus/caret — `click` the target field first unless the app focuses it for you.

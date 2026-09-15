@@ -40,7 +40,9 @@ out of per-pid routing — which is why Codex allows concurrent agents on
 - Virtual displays or VMs. They solve *visual* separation, not input routing,
   and would not remove the need for the SkyLight work.
 - Concurrency for two requests against the *same* app. Serialized, as in Codex.
-- Changing the default mode. Foreground stays the default.
+- Changing the default mode. Foreground stays the default. *(Superseded
+  2026-09-15: background is now the default wherever focus-without-raise
+  resolves — `BackgroundMode.auto`, switchable with `skylight background`.)*
 
 ## Architecture
 

@@ -32,6 +32,8 @@ describe("contract", () => {
         expect(typeof r.version).toBe("string");
         expect(typeof r.permissions.accessibility).toBe("boolean");
         expect(typeof r.skylight.focus_without_raise).toBe("boolean");
+        expect(["auto", "on", "off"]).toContain(r.background_mode);
+        expect(typeof r.background_default).toBe("boolean");
         expect(typeof r.parallel_actuation).toBe("boolean");
       } else if (resp.decodes_to === "ListAppsResult") {
         const r = resp.json as ListAppsResult;

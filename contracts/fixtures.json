@@ -261,7 +261,7 @@
           "trusted_events": false,
           "space_management": true
         },
-        "background_default": false,
+        "background_mode": "auto", "background_default": true,
         "parallel_actuation": true
       }
     },
