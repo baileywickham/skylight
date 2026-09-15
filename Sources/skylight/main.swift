@@ -106,6 +106,10 @@ func agentControl(_ flag: String) -> String {
         .trimmingCharacters(in: .whitespacesAndNewlines)
     if task.terminationStatus != 0 {
         print("error: \(flag) failed (\(word.isEmpty ? "see above" : word))")
+        if flag == "--register" {
+            print("  -> from 'brew install/upgrade' this can fail: Homebrew runs cask install steps in a")
+            print("     sandbox that blocks registration. Run 'skylight start' (skylight-run does it for you).")
+        }
         exit(1)
     }
     return word

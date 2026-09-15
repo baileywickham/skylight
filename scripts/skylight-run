@@ -128,7 +128,9 @@ case "${1:-}" in
     # helpers here log to stderr), and the daemon must be up before the first
     # tool call rather than lazily inside one.
     ensure_daemon
-    exec "$TSX" "$TS_DIR/src/mcp.ts"
+    # mcp.ts runs `$SKYLIGHT_CLI start` itself if the daemon goes away later
+    # (e.g. a brew upgrade under a long-lived server).
+    SKYLIGHT_CLI="$CLI" exec "$TSX" "$TS_DIR/src/mcp.ts"
     ;;
   -e)
     [ -n "${2:-}" ] || die "usage: skylight-run -e '<code>'"

@@ -7,10 +7,11 @@
 //
 // Run: `skylight-run --mcp` (ensures the daemon, then execs this file).
 // Register: `claude mcp add --scope user skylight -- skylight-run --mcp`.
+import { execFile } from "node:child_process";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { SkyClient, SkyError } from "./client.js";
+import { SkyClient, SkyError, neverReachedDaemon } from "./client.js";
 import type { AppState, DisplayScreenshot } from "./types.js";
 
 const MAX_DIMENSION = Number(process.env.SKYLIGHT_MCP_MAX_DIMENSION ?? 1568);
@@ -32,11 +33,40 @@ function image(dataUrl: string | null | undefined): Content[] {
   return [{ type: "image", data: dataUrl.slice(comma + 1), mimeType: "image/png" }];
 }
 
+// The in-bundle `skylight` CLI, passed by skylight-run. A `brew upgrade` stops
+// the daemon and the cask's postflight cannot register it again from inside
+// Homebrew's install-step sandbox, so a server that outlives the upgrade starts
+// the daemon itself instead of failing every call until it is restarted.
+const cli = process.env.SKYLIGHT_CLI;
+let starting: Promise<boolean> | null = null;
+
+function startDaemon(): Promise<boolean> {
+  if (!cli) return Promise.resolve(false);
+  starting ??= new Promise<boolean>((resolve) => {
+    // Output is captured, never inherited: stdout is this server's transport.
+    execFile(cli, ["start"], { timeout: 30_000 }, (err) => {
+      starting = null;
+      resolve(!err);
+    });
+  });
+  return starting;
+}
+
 async function run(body: () => Promise<Content[]>) {
   try {
     return { content: await body() };
   } catch (err) {
-    const message = err instanceof SkyError ? `${err.code}: ${err.message}` : String(err);
+    let failure = err;
+    // Retry only a call that never reached the daemon: nothing was sent, so
+    // it cannot run twice.
+    if (neverReachedDaemon(err) && (await startDaemon())) {
+      try {
+        return { content: await body() };
+      } catch (retryErr) {
+        failure = retryErr;
+      }
+    }
+    const message = failure instanceof SkyError ? `${failure.code}: ${failure.message}` : String(failure);
     return { isError: true, content: [{ type: "text" as const, text: message }] };
   }
 }

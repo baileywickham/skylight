@@ -264,6 +264,13 @@ export declare class SkyError extends Error {
     readonly code: string;
     constructor(code: string, message: string);
 }
+/**
+ * True when `err` means the request never reached SkylightService: the socket
+ * failed to connect (daemon not running, stale socket file). Nothing was sent,
+ * so the call is safe to retry once the daemon is up. A connection that broke
+ * after connecting may already have delivered the request, so it never matches.
+ */
+export declare function neverReachedDaemon(err: unknown): boolean;
 export declare class SkyClient {
     readonly config: SkyConfig;
     private socket;

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { SkyClient, SkyError, buildRequest, defaultConfig } from "../src/client.js";
+import { SkyClient, SkyError, buildRequest, defaultConfig, neverReachedDaemon } from "../src/client.js";
 
 function tmpSock(): string {
   return path.join(os.tmpdir(), `sky-test-${Math.floor(Math.random() * 1e9)}.sock`);
@@ -168,4 +168,22 @@ describe("SkyClient", () => {
 
     await expect(pending).rejects.toThrow();
   }, 5000);
+});
+
+describe("neverReachedDaemon", () => {
+  it("matches a connect failure: nothing listening at the socket", async () => {
+    const socket_path = path.join(os.tmpdir(), `sky-absent-${process.pid}-${Date.now()}.sock`);
+    const client = new SkyClient({ ...defaultConfig(), socket_path });
+    const err = await client.call("ping", {}).catch((e: unknown) => e);
+    client.close();
+    expect(err).toBeInstanceOf(SkyError);
+    expect(neverReachedDaemon(err)).toBe(true);
+  });
+
+  it("does not match failures after connecting, or other errors", () => {
+    expect(neverReachedDaemon(new SkyError("connection_failed",
+      "cannot reach SkylightService at /x (run 'skylight start'): read ECONNRESET"))).toBe(false);
+    expect(neverReachedDaemon(new SkyError("connection_closed", "connection to SkylightService closed unexpectedly"))).toBe(false);
+    expect(neverReachedDaemon(new Error("connect ENOENT /x"))).toBe(false);
+  });
 });

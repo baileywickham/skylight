@@ -9,49 +9,22 @@ import ServiceManagement
 // bundle's main executable: registering from a helper binary "succeeds" but
 // launchd then refuses to spawn the agent (EX_CONFIG) and unregister is denied.
 // The CLI's `skylight register` execs this.
-/// Whether launchd has the agent loaded in this user's GUI domain. Distinct from
-/// `SMAppService.status`, which is the Background Task Management record and
-/// can read `.enabled` while launchd has no such service.
-func launchdHasAgent() -> Bool {
-    let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-    task.arguments = ["print", "gui/\(getuid())/com.skylight.SkylightService"]
-    task.standardOutput = FileHandle.nullDevice
-    task.standardError = FileHandle.nullDevice
-    guard (try? task.run()) != nil else { return false }
-    task.waitUntilExit()
-    return task.terminationStatus == 0
-}
-
 if let flag = CommandLine.arguments.dropFirst().first, ["--register", "--unregister", "--status"].contains(flag) {
     let service = SMAppService.agent(plistName: "com.skylight.SkylightService.plist")
-    switch flag {
-    case "--register":
-        // A cask upgrade runs this right after brew's `uninstall launchctl:`
-        // booted the old agent out and swapped the bundle; register() then
-        // fails transiently (SMAppServiceErrorDomain 57, "Socket is not
-        // connected") and the agent stays out of launchd until someone
-        // registers again. So retry, and judge success by the outcome rather
-        // than the call: register() also throws on an already-enabled agent on
-        // some releases.
-        var failure: Error?
-        for attempt in 0..<15 {
-            if attempt > 0 { sleep(1) }
-            do { try service.register(); failure = nil } catch { failure = error }
-            if service.status == .requiresApproval || service.status == .notFound { break }
-            if service.status == .enabled && launchdHasAgent() { failure = nil; break }
-        }
-        if let failure, service.status != .enabled {
-            FileHandle.standardError.write(Data("\(flag) failed: \(failure)\n".utf8))
-            exit(1)
-        }
-    case "--unregister":
-        do { try service.unregister() } catch {
+    do {
+        if flag == "--register" { try service.register() }
+        if flag == "--unregister" { try service.unregister() }
+    } catch {
+        // register() throws on an already-enabled agent on some releases;
+        // only the resulting status matters. It also fails outright
+        // (SMAppServiceErrorDomain 57) when run by the cask's postflight_steps,
+        // inside Homebrew's sandboxed install-step child — retrying there does
+        // not help. `skylight start`, which skylight-run calls whenever the
+        // socket is down, registers again from a normal context.
+        if flag == "--unregister" || service.status != .enabled {
             FileHandle.standardError.write(Data("\(flag) failed: \(error)\n".utf8))
             exit(1)
         }
-    default:
-        break
     }
     switch service.status {
     case .enabled: print("enabled")

@@ -112,12 +112,15 @@ Dev install from a checkout: `scripts/install-local.sh` (same build, local
 Developer ID / Apple Development identity, no notarization, `/Applications`).
 Never run the daemon as a terminal child in installed mode: TCC keys the grants
 to the launchd-launched .app.
-Upgrades: brew's `uninstall launchctl:` boots the agent out, and the postflight
-`register` that follows can fail transiently (`SMAppServiceErrorDomain` 57), which
-used to leave the daemon down with BTM still reporting `enabled`. `--register`
-therefore retries until launchd actually has the agent (`launchctl print`), and
-`skylight start` re-registers when kickstart can't find it. The CLI resolves its
-.app from the real executable path, since it runs via a brew-bin symlink.
+Upgrades: brew's `uninstall launchctl:` boots the agent out, and the cask's
+postflight `register` cannot bring it back: Homebrew runs `*_steps` commands in a
+sandboxed child where SMAppService fails (`SMAppServiceErrorDomain` 57). Retrying
+and `network_access: true` don't help (both verified), and legacy `postflight do`
+blocks are deprecated. So the daemon comes back on first use: `skylight start`
+re-registers when launchd lacks the agent, `skylight-run` calls it whenever the
+socket is down, and a long-lived `--mcp` server runs it (`SKYLIGHT_CLI`) and
+retries a call that never reached the daemon. The CLI resolves its .app from the
+real executable path, since it runs via a brew-bin symlink.
 
 ## Conventions & gotchas (learned the hard way — don't regress these)
 
