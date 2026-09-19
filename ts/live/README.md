@@ -25,7 +25,7 @@ the frontmost app.
 echo "marker-123" > /tmp/skylight-live.txt
 open -a TextEdit /tmp/skylight-live.txt
 osascript -e 'tell application "Finder" to activate'   # TextEdit must be BACKGROUND
-cd ts && npx tsx live/background-check.mts marker-123
+cd ts && pnpm exec tsx live/background-check.mts marker-123
 ```
 
 Expect `COPIED-IN-BACKGROUND PASS` and `KEPT-FOCUS PASS`.
@@ -38,7 +38,7 @@ nothing is modified, but they pay the full post-action settle that makes the
 overlap measurable.
 
 ```bash
-cd ts && npx tsx live/parallel-check.mts TextEdit Finder
+cd ts && pnpm exec tsx live/parallel-check.mts TextEdit Finder
 ```
 
 Expect roughly a 2x `SPEEDUP`, `DIFFERENT-APPS-OVERLAP PASS`, and
@@ -55,7 +55,7 @@ leave the fixture window as the browser's key window — a hover into a
 non-key window is dropped by the browser and the check will (correctly) fail.
 
 ```bash
-cd ts && npx tsx live/hover-check.mts "Google Chrome"
+cd ts && pnpm exec tsx live/hover-check.mts "Google Chrome"
 ```
 
 Expect `HOVER-SEEN PASS`, `REVEALED-ELEMENT PASS` and `CLICKED-REVEALED PASS`.

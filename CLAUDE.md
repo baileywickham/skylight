@@ -10,7 +10,7 @@ or raw coordinates.
 
 ```
 Claude / any client
-  │  writes TS, runs `npx tsx script.ts`
+  │  writes TS, runs `pnpm exec tsx script.ts`
   ▼
 @skylight/sky  (TypeScript client, ts/)  ── one JSON object per line ──▶
   ▼  Unix socket: ~/Library/Application Support/skylight/ipc/computeruse.sock
@@ -50,7 +50,7 @@ or `{"id":n,"ok":false,"error":{"code":"<slug>","message":"..."}}`.
 - `Sources/SkylightService/main.swift` — the daemon: registers all methods, owns
   the run loop, audit log, kill switch.
 - `Sources/skylight/main.swift` — the `skylight` CLI (`doctor`, `start`, `register`/`unregister`, approvals, `background`, usage).
-- `ts/` — the `@skylight/sky` client (`src/client.ts`, `src/types.ts`,
+- `ts/` — the `@skylight/sky` client (pnpm; `src/client.ts`, `src/types.ts`,
   `sky.d.ts`) + tests, and `src/mcp.ts`, the MCP server (`skylight-run --mcp`)
   that exposes every method as a tool. `packaging/` (Info.plist + LaunchAgent), `scripts/`
   (`build.sh`, `install-local.sh`, `skylight-run`).
@@ -61,7 +61,7 @@ or `{"id":n,"ok":false,"error":{"code":"<slug>","message":"..."}}`.
 swift build                       # daemon binary → .build/debug/SkylightService
 swift test                        # Swift unit tests (XCTest); must be 0 warnings
 swift build 2>&1 | grep -i warning   # keep this EMPTY
-(cd ts && npm install && npx vitest run)   # TS tests (vitest)
+(cd ts && pnpm install && pnpm test)      # TS tests (vitest)
 ```
 
 The live end-to-end smoke test is **gated**: `SKYLIGHT_SMOKE=1` runs it (needs
@@ -77,7 +77,7 @@ after a macOS upgrade; see `ts/live/README.md`.
 ```bash
 swift build && .build/debug/SkylightService &   # this machine's local binary has TCC grants
 # then from ts/, write a .ts driver and run it:
-npx tsx driver.ts
+pnpm exec tsx driver.ts
 ```
 
 `ts/test/smoke.test.ts` is the canonical example of spawning the daemon and
@@ -103,7 +103,8 @@ wrapper (`Contents/Resources/bin/skylight-run`), the TS client source
 registers that agent with `SMAppService` and starts the daemon — no separate
 signing or install step, and `brew upgrade` just works. `skylight-run` stages
 the TS client + `node_modules` under `~/Library/Application Support/skylight/ts-<version>`
-on first run so the signed bundle is never written to.
+on first run (pnpm from PATH, else corepack, else a one-shot `npx pnpm`) so the
+signed bundle is never written to.
 
 Releases: `./release.sh patch` tags `vX.Y.Z`; `.github/workflows/release.yml`
 runs `scripts/build.sh` (sign + notarize + DMG/ZIP), publishes the GitHub
@@ -124,8 +125,15 @@ real executable path, since it runs via a brew-bin symlink.
 
 ## Conventions & gotchas (learned the hard way — don't regress these)
 
-- **`npx tsx -e '...'` one-liners FAIL** here (esbuild CJS top-level-await). Write
-  a `.ts`/`.mjs` file and run it, or add a vitest spec.
+- **`pnpm exec tsx -e '...'` one-liners FAIL** here (esbuild CJS top-level-await).
+  Write a `.ts`/`.mjs` file and run it, or add a vitest spec.
+- **`ts/` is a pnpm package** (`packageManager: pnpm@10.25.0`, lockfile
+  `pnpm-lock.yaml`). `ts/.npmrc` pins `node-linker=hoisted`: `skylight-run`
+  stages the client into `~/Library/Application Support/skylight/ts-<version>`
+  and installs there, so a node_modules of symlinks into the global store would
+  break the moment the store is pruned. pnpm blocks dependency build scripts by
+  default and the suite runs fine without them (esbuild ships its binary as a
+  platform optional dep) — don't `pnpm approve-builds` without a reason.
 - **Never use `is`/`as?` to filter pure CoreFoundation types** (e.g. `AXUIElement`,
   `AXValue`). At runtime `$0 is AXUIElement` returns true for *any* CF type, so
   `unsafeDowncast` after it is UB. Filter with

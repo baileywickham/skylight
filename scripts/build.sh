@@ -62,9 +62,11 @@ GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 git diff-index --quiet HEAD -- ":!${VERSION_FILE}" 2>/dev/null || GIT_COMMIT="${GIT_COMMIT}-dirty"
 /usr/libexec/PlistBuddy -c "Add :SkylightGitCommit string ${GIT_COMMIT}" "${APP_BUNDLE}/Contents/Info.plist"
 
-# TS client: source + lockfile only. node_modules is installed per-user on first
-# run (scripts/skylight-run) so nothing is ever written inside the signed bundle.
-cp -R ts/src ts/sky.d.ts ts/package.json ts/package-lock.json ts/tsconfig.json \
+# TS client: source + lockfile only (plus .npmrc, which pins the hoisted
+# node_modules layout the staged install depends on). node_modules is installed
+# per-user on first run (scripts/skylight-run) so nothing is ever written inside
+# the signed bundle.
+cp -R ts/src ts/sky.d.ts ts/package.json ts/pnpm-lock.yaml ts/.npmrc ts/tsconfig.json \
       "${APP_BUNDLE}/Contents/Resources/ts/"
 
 # Sign inside-out: the CLI, then the bundle (which seals the daemon + resources).
