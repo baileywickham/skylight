@@ -2,8 +2,9 @@
 
 Manual verification for behavior that unit tests structurally cannot prove: the
 private window-server records in `SkyLightBridge` are accepted (or silently
-ignored) only by a real window server, and per-app parallelism is only
-observable through a real socket with real timing.
+ignored) only by a real window server, per-app parallelism is only observable
+through a real socket with real timing, and only a real Chromium compositor
+decides whether a synthetic mouse move counts as a hover.
 
 Run these after a macOS upgrade, or when `skylight doctor` reports
 `focus w/o raise: UNAVAILABLE`. They need a daemon built from the current tree:
@@ -42,3 +43,19 @@ cd ts && npx tsx live/parallel-check.mts TextEdit Finder
 
 Expect roughly a 2x `SPEEDUP`, `DIFFERENT-APPS-OVERLAP PASS`, and
 `SAME-APP-SERIALIZED PASS`.
+
+## hover-check.mts
+
+Proves a background `hover` makes web content render a control that exists only
+while the pointer is over it — with the user's real cursor untouched — so the
+control gets an `element_index` and can be clicked. Before `hover`, a control
+like that was unreachable from a background agent. The check writes its own
+fixture page and opens it; keep the real cursor off the page while it runs, and
+leave the fixture window as the browser's key window — a hover into a
+non-key window is dropped by the browser and the check will (correctly) fail.
+
+```bash
+cd ts && npx tsx live/hover-check.mts "Google Chrome"
+```
+
+Expect `HOVER-SEEN PASS`, `REVEALED-ELEMENT PASS` and `CLICKED-REVEALED PASS`.

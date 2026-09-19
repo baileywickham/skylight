@@ -41,8 +41,9 @@ All methods take `app` (app name, e.g. `"Finder"`). Full types: `$(skylight-run 
 |---|---|
 | `list_apps` | `include_menu_bar_apps?` (also list accessory/LSUIElement apps, tagged `menu_bar_only`) |
 | `list_windows` | — (windows with `window_id`, `title`, `is_focused`) |
-| `get_app_state` | `disableDiff?`, `window_id?` (from `list_windows`), `include_data_url?` |
-| `click` | `element_index` OR `x`,`y` (screenshot px); `display_id?` makes x/y pixels of the latest `screenshot` (then `app` is optional — hit-tested); `mouse_button?`, `click_count?` |
+| `get_app_state` | `disableDiff?`, `window_id?` (from `list_windows`), `include_data_url?`, `max_depth?`/`max_nodes?` (tree caps, default 60/5000 — raise when a line says "truncated … raise with max_depth") |
+| `click` | `element_index` OR `x`,`y` (screenshot px); `display_id?` makes x/y pixels of the latest `screenshot` (then `app` is optional — hit-tested); `mouse_button?`, `click_count?`, `hover?` (default true: move the pointer there first) |
+| `hover` | `element_index` OR `x`,`y` (same targeting as `click`); `settle_ms?` — park the pointer WITHOUT clicking, so hover-only UI renders |
 | `press_key` | `keys`: X-keysym chord, e.g. `"Cmd+s"`, `"Ctrl+Shift+t"`, `"Return"`; `app` optional (frontmost) |
 | `type_text` | `text`; `app` optional (frontmost) |
 | `scroll` | `element_index`, `direction` (up/down/left/right), `pages` |
@@ -53,11 +54,11 @@ All methods take `app` (app name, e.g. `"Finder"`). Full types: `$(skylight-run 
 | `capabilities` | — (TCC grants, private-symbol availability, `parallel_actuation`, `space_management`) |
 | `list_displays` | — (`display_id`, size in points, origin, `backing_scale`, `is_main`) |
 | `screenshot` | `display_id?`, `max_dimension?`, `show_cursor?`, `include_data_url?` — whole display, 1 px/pt by default |
-| `zoom` | `display_id?`, `x`,`y`,`width`,`height` (px of the latest screenshot), `max_dimension?` — native-res crop, read-only |
+| `zoom` | `app?`+`window_id?` (px of that app's latest `get_app_state` image) OR `display_id?` (px of the latest `screenshot`), `x`,`y`,`width`,`height`, `max_dimension?` — native-res crop, read-only |
 | `read_clipboard` / `write_clipboard` | — / `text` |
 | `bring_to_active_space` | `app`, `window_id?` — move a window to the current Space without switching |
 
-Every action (`click`, `press_key`, `type_text`, `scroll`, `set_value`, `drag`, `perform_secondary_action`, `select_text`) also accepts `background?: boolean` — background is already the default; `false` brings the app to the front first.
+Every action (`click`, `hover`, `press_key`, `type_text`, `scroll`, `set_value`, `drag`, `perform_secondary_action`, `select_text`) also accepts `background?: boolean` — background is already the default; `false` brings the app to the front first.
 
 ## Pixel path (no AX tree, or the whole desktop)
 
@@ -69,7 +70,7 @@ await sky.click({ x: 640, y: 350, display_id: shot.display_id });     // app hit
 await sky.write_clipboard({ text: "long text" }); await sky.press_key({ keys: "Cmd+v" });'
 ```
 
-Coordinates are always pixels of the most recent image of that target (per-app window capture, or per-display `screenshot`); `zoom` never changes them. `get_app_state` and `screenshot` take `max_dimension` to cap the long side.
+Coordinates are always pixels of the most recent image of that target (per-app window capture, or per-display `screenshot`); `zoom` never changes them. `zoom` reads both spaces: pass `app` to crop that app's window in `get_app_state` pixels, `display_id` (or neither) to crop a display in `screenshot` pixels — a window's pixels handed to a display zoom crop whatever app sits at those screen coordinates. `get_app_state` and `screenshot` take `max_dimension` to cap the long side.
 
 ## Per-app notes
 
@@ -116,6 +117,22 @@ Rules:
   would be best-effort there). Don't force `background: true` without telling the user.
 - Chromium apps: background right-click on **web content** gets coerced to
   left-click; use `perform_secondary_action` with `AXShowMenu` instead.
+- **A control that a web UI only shows on hover has no `element_index` until you
+  hover it** — and background actions never move the real cursor, so it never
+  appears on its own. Hover it, capture again, then click the element that
+  appeared:
+  ```bash
+  skylight-run -e '
+  await sky.hover({ app: "Claude", element_index: 288 });   // the row; nothing is clicked
+  const s = await sky.get_app_state({ app: "Claude", disableDiff: true });
+  // the revealed control is now in the tree with its own index'
+  ```
+  A coordinate `click` does the pointer move itself (`hover: false` opts out), but
+  when the control is created BY the hover, prefer the two-step above.
+- `hover` only reaches the app's **key window** (the one `list_windows` shows as
+  `is_focused`). A hover into another window of the same app is silently
+  dropped, whatever the mode — raise that window first (click it, or act with
+  `background: false`).
 
 ## Gotchas
 

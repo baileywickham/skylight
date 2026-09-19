@@ -244,6 +244,68 @@
         "window_id": 4242
       },
       "line": "{\"id\":1,\"method\":\"bring_to_active_space\",\"params\":{\"app\":\"Notes\",\"window_id\":4242}}"
+    },
+    {
+      "method": "get_app_state",
+      "params": {
+        "app": "Claude",
+        "max_depth": 120,
+        "max_nodes": 8000
+      },
+      "line": "{\"id\":1,\"method\":\"get_app_state\",\"params\":{\"app\":\"Claude\",\"max_depth\":120,\"max_nodes\":8000}}"
+    },
+    {
+      "method": "click",
+      "params": {
+        "app": "Notes",
+        "x": 100,
+        "y": 200,
+        "hover": false
+      },
+      "line": "{\"id\":1,\"method\":\"click\",\"params\":{\"app\":\"Notes\",\"x\":100,\"y\":200,\"hover\":false}}"
+    },
+    {
+      "method": "hover",
+      "params": {
+        "app": "Claude",
+        "element_index": 42
+      },
+      "line": "{\"id\":1,\"method\":\"hover\",\"params\":{\"app\":\"Claude\",\"element_index\":42}}"
+    },
+    {
+      "method": "hover",
+      "params": {
+        "app": "Claude",
+        "x": 980,
+        "y": 420,
+        "settle_ms": 500,
+        "background": true
+      },
+      "line": "{\"id\":1,\"method\":\"hover\",\"params\":{\"app\":\"Claude\",\"x\":980,\"y\":420,\"settle_ms\":500,\"background\":true}}"
+    },
+    {
+      "method": "zoom",
+      "params": {
+        "app": "Claude",
+        "x": 800,
+        "y": 300,
+        "width": 400,
+        "height": 120
+      },
+      "line": "{\"id\":1,\"method\":\"zoom\",\"params\":{\"app\":\"Claude\",\"x\":800,\"y\":300,\"width\":400,\"height\":120}}"
+    },
+    {
+      "method": "zoom",
+      "params": {
+        "app": "Claude",
+        "window_id": 4242,
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 80,
+        "max_dimension": 1568
+      },
+      "line": "{\"id\":1,\"method\":\"zoom\",\"params\":{\"app\":\"Claude\",\"window_id\":4242,\"x\":0,\"y\":0,\"width\":200,\"height\":80,\"max_dimension\":1568}}"
     }
   ],
   "responses": [
@@ -261,7 +323,8 @@
           "trusted_events": false,
           "space_management": true
         },
-        "background_mode": "auto", "background_default": true,
+        "background_mode": "auto",
+        "background_default": true,
         "parallel_actuation": true
       }
     },
@@ -390,6 +453,34 @@
         "window_id": 4242,
         "on_active_space": true,
         "moved": true
+      }
+    },
+    {
+      "name": "zoom_display",
+      "decodes_to": "ZoomResult",
+      "json": {
+        "display_id": 1,
+        "url": "file:///tmp/zoom-1.png",
+        "data_url": null,
+        "width": 800,
+        "height": 240,
+        "scale": 2,
+        "origin_x": 400,
+        "origin_y": 150
+      }
+    },
+    {
+      "name": "zoom_window",
+      "decodes_to": "ZoomResult",
+      "json": {
+        "window_id": 4242,
+        "url": "file:///tmp/zoom-window.png",
+        "data_url": null,
+        "width": 800,
+        "height": 240,
+        "scale": 2,
+        "origin_x": 512,
+        "origin_y": 300
       }
     }
   ],

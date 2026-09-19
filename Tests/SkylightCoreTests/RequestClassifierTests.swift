@@ -23,7 +23,7 @@ final class RequestClassifierTests: XCTestCase {
     }
 
     func testBackgroundActionsAreKeyedPerApp() {
-        for method in ["click", "press_key", "type_text", "scroll", "set_value", "drag",
+        for method in ["click", "hover", "press_key", "type_text", "scroll", "set_value", "drag",
                        "perform_secondary_action", "select_text"] {
             XCTAssertEqual(classify(method, "pid:42", background: true), .keyed("pid:42"), method)
         }
@@ -32,7 +32,7 @@ final class RequestClassifierTests: XCTestCase {
     /// Foreground actions move the real cursor and change which app is
     /// frontmost — global state, so they must not overlap anything.
     func testForegroundActionsAreExclusive() {
-        for method in ["click", "press_key", "type_text", "scroll", "set_value", "drag",
+        for method in ["click", "hover", "press_key", "type_text", "scroll", "set_value", "drag",
                        "perform_secondary_action", "select_text"] {
             XCTAssertEqual(classify(method, "pid:42", background: false), .exclusive, method)
         }
@@ -43,8 +43,18 @@ final class RequestClassifierTests: XCTestCase {
     func testDisplayMethodsShareTheDisplayKeyInBothModes() {
         for method in ["screenshot", "zoom"] {
             XCTAssertEqual(classify(method, nil, background: false), .keyed("$display"), method)
-            XCTAssertEqual(classify(method, "pid:42", background: true), .keyed("$display"), method)
+            XCTAssertEqual(classify(method, nil, background: true), .keyed("$display"), method)
         }
+        XCTAssertEqual(classify("screenshot", "pid:42", background: true), .keyed("$display"),
+                       "screenshot has no app target, so naming one cannot move it off the display key")
+    }
+
+    /// A zoom that names an app crops THAT app's window from its capture
+    /// geometry, so it belongs on the app's key — where it serializes against
+    /// the app's own captures instead of against unrelated display shots.
+    func testZoomWithAnAppTargetIsKeyedPerApp() {
+        XCTAssertEqual(classify("zoom", "pid:42", background: true), .keyed("pid:42"))
+        XCTAssertEqual(classify("zoom", "pid:42", background: false), .keyed("pid:42"))
     }
 
     /// Moving a window between Spaces is an action: per-app in background

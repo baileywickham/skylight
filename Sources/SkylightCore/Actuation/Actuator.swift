@@ -43,6 +43,20 @@ public func scrollDeltas(total: Int32, maxStep: Int32 = 80) -> [Int32] {
     return steps
 }
 
+/// How long `hover` holds the pointer in place before returning: 250 ms by
+/// default, never more than 5s — a hover occupies the app's actuation slot,
+/// and nothing renders a hover state that slowly.
+public func hoverSettleMs(_ requested: Int?) -> Int {
+    min(max(requested ?? 250, 0), 5_000)
+}
+
+/// Pause between a coordinate click's pointer move and its press. A control
+/// that a web UI renders on hover needs a layout frame before it is under the
+/// pointer to be hit; verified live — at 0ms the press lands on the row behind
+/// the button that the same move just created.
+public let preClickHoverSettleMs = 150
+
+
 /// Performs the API's actions against live apps. NOT thread-safe (it shares
 /// AXCapture's per-app index map): all calls must stay on the daemon's global
 /// serial actuation queue, where the router already runs handlers.
@@ -206,6 +220,19 @@ public final class Actuator {
         return (app, window, geometry)
     }
 
+    /// The window an element action should treat as the target: the one the
+    /// latest capture used, not whatever is focused now. It matters for
+    /// pointer actions — a hover into a window that is not the app's key
+    /// window is dropped, and after the focus flip the wrong window would
+    /// become key.
+    private func capturedWindow(of app: NSRunningApplication) throws -> AXUIElement {
+        if let windowID = capture.latestWindowID(forPid: app.processIdentifier),
+           let listing = try? capture.windowListings(of: app).first(where: { $0.info.window_id == windowID }) {
+            return listing.element
+        }
+        return try capture.focusedWindow(of: app)
+    }
+
     /// Readies the target for an action.
     ///
     /// Foreground: bring it frontmost so session events land in it
@@ -249,6 +276,44 @@ public final class Actuator {
             post(event, pid: pid, background: true)
         }
         usleep(5_000)
+    }
+
+    /// Parks the pointer at `point` so the app renders its hover state there.
+    ///
+    /// Two moves, one pixel apart, with the delta fields set: an app tracks
+    /// hover by mouse-move deltas, and a single event at a position it already
+    /// believes the pointer occupies can be coalesced away. In background mode
+    /// these go per-pid, so the app sees a pointer the user's real cursor never
+    /// followed — which is the whole point: hover-only affordances render
+    /// without disturbing anyone.
+    private func postHover(app: NSRunningApplication, point: CGPoint, background: Bool, settleMs: Int) {
+        let approach = CGPoint(x: point.x - 1, y: point.y - 1)
+        for (p, delta) in [(approach, 0.0), (point, 1.0)] {
+            let event = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                                mouseCursorPosition: p, mouseButton: .left)
+            event?.setDoubleValueField(.mouseEventDeltaX, value: delta)
+            event?.setDoubleValueField(.mouseEventDeltaY, value: delta)
+            post(event, pid: app.processIdentifier, background: background)
+            usleep(15_000)
+        }
+        if settleMs > 0 { usleep(UInt32(settleMs) * 1000) }
+    }
+
+    /// The point a pointer action aims at for an element: the center of the
+    /// part of its frame that is actually on-window, like `scroll` — an AX
+    /// frame can extend past the window (scrollable content) and its raw
+    /// center can land over a different window entirely.
+    private func pointerFrame(element: AXUIElement, window: AXUIElement, action: String) throws -> CGRect {
+        guard let elementFrame = axFrame(of: element) else {
+            throw SkyServiceError(code: .elementNotActionable, message: "\(action): element has no frame")
+        }
+        return axFrame(of: window)
+            .map { visibleScrollFrame(elementFrame: elementFrame, windowFrame: $0) } ?? elementFrame
+    }
+
+    private func pointerPoint(element: AXUIElement, window: AXUIElement, action: String) throws -> CGPoint {
+        let frame = try pointerFrame(element: element, window: window, action: action)
+        return CGPoint(x: frame.midX, y: frame.midY)
     }
 
     /// Delivers a synthetic event. Foreground: session HID tap (frontmost
@@ -308,6 +373,11 @@ public final class Actuator {
                 point = globalPoint(fromScreenshotX: x, y: y, geometry: geometry!)
             }
             primeUserActivationIfNeeded(app: app, background: background)
+            // After the primer (which parks the pointer at (-1,-1)), never
+            // before: the primer would otherwise undo the hover.
+            if input.hover ?? true {
+                postHover(app: app, point: point, background: background, settleMs: preClickHoverSettleMs)
+            }
             let (button, down, up, _) = try mouseButton(input.mouse_button)
             let clicks = input.click_count ?? 1
             for i in 1...max(clicks, 1) {
@@ -322,6 +392,48 @@ public final class Actuator {
             throw SkyServiceError(code: .invalidParams, message: "click needs element_index or x+y")
         }
         postActionSleep()
+        return ActionResult(done: true)
+    }
+
+    /// Moves the pointer onto an element or point and holds it there, so
+    /// hover-only UI renders before the next capture. Clicks nothing.
+    public func hover(_ input: HoverInput) throws -> ActionResult {
+        try guardNotPaused()
+        let background = effectiveBackground(input.background)
+        let app: NSRunningApplication
+        let point: CGPoint
+        if let index = input.element_index {
+            guard let appIdentifier = input.app else {
+                throw SkyServiceError(code: .invalidParams, message: "hover by element_index needs app")
+            }
+            app = try resolveApproved(appIdentifier)
+            let element = try capture.element(forIndex: index, appPid: app.processIdentifier)
+            let window = try capturedWindow(of: app)
+            point = try pointerPoint(element: element, window: window, action: "hover[\(index)]")
+            prepareTarget(app: app, window: window, background: background, action: .hover)
+        } else if let x = input.x, let y = input.y {
+            if let displayID = input.display_id {
+                point = try displayPoint(x: x, y: y, displayID: displayID)
+                let resolved = try displayTarget(input.app, at: point)
+                app = resolved.app
+                prepareTarget(app: app, window: resolved.window, background: background, action: .hover)
+            } else {
+                guard let appIdentifier = input.app else {
+                    throw SkyServiceError(code: .invalidParams,
+                                          message: "hover by window coordinates needs app (or pass display_id for screen coordinates)")
+                }
+                let (resolvedApp, window, geometry) = try target(appIdentifier, needsGeometry: true)
+                app = resolvedApp
+                prepareTarget(app: app, window: window, background: background, action: .hover)
+                point = globalPoint(fromScreenshotX: x, y: y, geometry: geometry!)
+            }
+        } else {
+            throw SkyServiceError(code: .invalidParams, message: "hover needs element_index or x+y")
+        }
+        // Hold the pointer there: hover UI often fades in, and the caller's
+        // next get_app_state must see the settled state, not the transition.
+        postHover(app: app, point: point, background: background,
+                  settleMs: hoverSettleMs(input.settle_ms))
         return ActionResult(done: true)
     }
 
@@ -397,11 +509,7 @@ public final class Actuator {
         // elements report full-content-sized AX frames extending far past the
         // window, so the raw frame center can lie over a different window and
         // the wheel event would scroll that one instead; clamp to the window.
-        guard let elementFrame = axFrame(of: element) else {
-            throw SkyServiceError(code: .elementNotActionable, message: "scroll[\(input.element_index)]: element has no frame")
-        }
-        let frame = axFrame(of: window)
-            .map { visibleScrollFrame(elementFrame: elementFrame, windowFrame: $0) } ?? elementFrame
+        let frame = try pointerFrame(element: element, window: window, action: "scroll[\(input.element_index)]")
         let center = CGPoint(x: frame.midX, y: frame.midY)
         post(CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: center, mouseButton: .left),
              pid: app.processIdentifier, background: background)

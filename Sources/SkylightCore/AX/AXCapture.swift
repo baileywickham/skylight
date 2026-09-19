@@ -239,7 +239,10 @@ public final class AXCapture {
     /// saw, and the next diff would silently omit the intervening changes.
     /// (The sticky ElementIndexMap does advance during the walk; indices are
     /// monotonic, so that is safe regardless of response delivery.)
-    public func capture(app: NSRunningApplication, windowID: Int? = nil, disableDiff: Bool) throws -> CaptureResult {
+    /// `caps` overrides the serializer's depth/node budget for this capture
+    /// only (get_app_state's `max_depth`/`max_nodes`); nil keeps the defaults.
+    public func capture(app: NSRunningApplication, windowID: Int? = nil, disableDiff: Bool,
+                        caps overrideCaps: TreeCaps? = nil) throws -> CaptureResult {
         guard Permissions.status().accessibility else {
             let instructions = Permissions.instructions(
                 for: PermissionStatus(accessibility: false, screen_recording: true))
@@ -287,6 +290,7 @@ public final class AXCapture {
         }
         let currentWindowID = axWindowID(of: window).map { Int($0) }
         let geometry = try captureGeometry(for: window)
+        let caps = overrideCaps ?? self.caps
         var serialized = AXTreeSerializer(caps: caps).serialize(root: root, map: s.map)
         // Right after enablement Chromium can take a while (>1s cold, verified
         // live) to publish its web content, leaving the first walk without an

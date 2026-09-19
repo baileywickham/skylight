@@ -3,10 +3,23 @@ import Foundation
 public struct TreeCaps: Equatable {
     public let maxDepth: Int
     public let maxNodes: Int
-    public static let standard = TreeCaps(maxDepth: 30, maxNodes: 5000)
+    /// 60 levels, not the 30 this started with: Chromium/Electron web content
+    /// nests far deeper than any AppKit hierarchy (a claude.ai dialog row sits
+    /// past 40), and a depth cap hit mid-web-view hides exactly the nested
+    /// controls an agent came for. `maxNodes` stays the real budget — it bounds
+    /// the output, while depth only bounds one branch.
+    public static let standard = TreeCaps(maxDepth: 60, maxNodes: 5000)
     public init(maxDepth: Int, maxNodes: Int) {
         self.maxDepth = maxDepth
         self.maxNodes = maxNodes
+    }
+
+    /// Per-request overrides on top of these caps; nil keeps the current value.
+    /// Clamped to sane bounds so one request cannot hang a capture on a
+    /// pathological tree.
+    public func overridden(maxDepth newDepth: Int?, maxNodes newNodes: Int?) -> TreeCaps {
+        TreeCaps(maxDepth: newDepth.map { min(max($0, 1), 200) } ?? maxDepth,
+                 maxNodes: newNodes.map { min(max($0, 1), 50_000) } ?? maxNodes)
     }
 }
 
@@ -50,7 +63,7 @@ public final class AXTreeSerializer {
                       lines: inout [TreeLine], nodeBudget: inout Int) {
         if depth >= caps.maxDepth {
             lines.append(TreeLine(index: -1, depth: depth,
-                                  text: "[…] truncated (max depth \(caps.maxDepth) reached)"))
+                                  text: "[…] truncated (max depth \(caps.maxDepth) reached; raise with max_depth)"))
             return
         }
         if nodeBudget <= 0 {
@@ -78,7 +91,7 @@ public final class AXTreeSerializer {
     }
 
     private func appendNodeCapMarkerIfNeeded(depth: Int, lines: inout [TreeLine]) {
-        let marker = "[…] truncated (max nodes \(caps.maxNodes) reached)"
+        let marker = "[…] truncated (max nodes \(caps.maxNodes) reached; raise with max_nodes)"
         if lines.last?.text != marker {
             lines.append(TreeLine(index: -1, depth: depth, text: marker))
         }

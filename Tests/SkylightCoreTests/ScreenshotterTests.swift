@@ -13,6 +13,46 @@ final class ScreenshotterTests: XCTestCase {
         return ctx.makeImage()!
     }
 
+    // MARK: - Window zoom crop math
+
+    /// The common case: the last get_app_state image was downscaled (a
+    /// max_dimension cap), so a region read off it maps onto the native
+    /// capture by the ratio between the two scales.
+    func testWindowCropRectRescalesFromTheCapturedImageScale() {
+        let rect = windowCropRect(x: 100, y: 50, width: 200, height: 40,
+                                  capturedScale: 1, imageScale: 2,
+                                  imageSize: CGSize(width: 2000, height: 1200))
+        XCTAssertEqual(rect, CGRect(x: 200, y: 100, width: 400, height: 80))
+    }
+
+    func testWindowCropRectIsIdentityWhenBothScalesMatch() {
+        let rect = windowCropRect(x: 10, y: 20, width: 30, height: 40,
+                                  capturedScale: 2, imageScale: 2,
+                                  imageSize: CGSize(width: 800, height: 600))
+        XCTAssertEqual(rect, CGRect(x: 10, y: 20, width: 30, height: 40))
+    }
+
+    /// A region that runs past the window edge is clipped, not refused: the
+    /// interesting part is still returned.
+    func testWindowCropRectClipsToTheImage() {
+        let rect = windowCropRect(x: 700, y: 550, width: 400, height: 400,
+                                  capturedScale: 1, imageScale: 1,
+                                  imageSize: CGSize(width: 800, height: 600))
+        XCTAssertEqual(rect, CGRect(x: 700, y: 550, width: 100, height: 50))
+    }
+
+    /// Entirely off-window is empty, which the caller turns into invalid_params
+    /// instead of cropping to nothing.
+    func testWindowCropRectIsEmptyOffWindow() {
+        XCTAssertTrue(windowCropRect(x: 2000, y: 2000, width: 100, height: 100,
+                                     capturedScale: 1, imageScale: 1,
+                                     imageSize: CGSize(width: 800, height: 600)).isEmpty)
+        XCTAssertTrue(windowCropRect(x: 0, y: 0, width: 100, height: 100,
+                                     capturedScale: 0, imageScale: 1,
+                                     imageSize: CGSize(width: 800, height: 600)).isEmpty,
+                      "a zero captured scale means no usable geometry, not a division by zero")
+    }
+
     func testPrivateBridgeSymbolResolves() {
         // The dlsym lookup itself must succeed on this OS; calling it on a fake
         // window would need permissions, but symbol presence is the load-bearing risk.

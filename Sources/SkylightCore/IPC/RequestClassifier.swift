@@ -37,7 +37,7 @@ public enum RequestClassifier {
     /// "everything else" so a method added later without a decision here runs
     /// alone instead of silently racing.
     public static let actionMethods: Set<String> = [
-        "click", "press_key", "type_text", "scroll", "set_value", "drag",
+        "click", "hover", "press_key", "type_text", "scroll", "set_value", "drag",
         "perform_secondary_action", "select_text", "bring_to_active_space",
     ]
 
@@ -49,7 +49,13 @@ public enum RequestClassifier {
     ///   - background: the effective background flag for this request.
     public static func classify(method: String, appKey: String?, background: Bool) -> RequestClass {
         if metaMethods.contains(method) { return .keyed(metaKey) }
-        if displayMethods.contains(method) { return .keyed(displayKey) }
+        if displayMethods.contains(method) {
+            // `zoom` can target an app's window instead of a display; it then
+            // reads that app's capture geometry and captures its window, so it
+            // belongs on the app's key, not the shared display one.
+            if let appKey, method == "zoom" { return .keyed(appKey) }
+            return .keyed(displayKey)
+        }
         // No resolvable target: fall back to exclusive. Such a request is
         // about to fail with app_not_found anyway, and guessing a key for it
         // could collide with a real app's slot.

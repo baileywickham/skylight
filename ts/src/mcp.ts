@@ -12,7 +12,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { SkyClient, SkyError, neverReachedDaemon } from "./client.js";
-import type { AppState, DisplayScreenshot } from "./types.js";
+import type { AppState, DisplayScreenshot, ZoomResult } from "./types.js";
 
 const MAX_DIMENSION = Number(process.env.SKYLIGHT_MCP_MAX_DIMENSION ?? 1568);
 
@@ -79,10 +79,17 @@ function appStateContent(state: AppState): Content[] {
   return [...text(`${header}\n${state.diffed ? "[diff since last capture]\n" : ""}${state.text}`), ...image(shot?.data_url)];
 }
 
-function displayShotContent(shot: DisplayScreenshot, kind: "screenshot" | "zoom"): Content[] {
-  const note = kind === "screenshot"
-    ? `display ${shot.display_id}: ${shot.width}x${shot.height}px, ${shot.scale} px/pt, origin (${shot.origin_x},${shot.origin_y}). click/drag with display_id=${shot.display_id} take pixels of this image.`
-    : `zoom of display ${shot.display_id}: ${shot.width}x${shot.height}px at ${shot.scale} px/pt, top-left at global point (${shot.origin_x},${shot.origin_y}). Read-only: keep using the last screenshot's pixels for clicks.`;
+function displayShotContent(shot: DisplayScreenshot): Content[] {
+  const note = `display ${shot.display_id}: ${shot.width}x${shot.height}px, ${shot.scale} px/pt, origin (${shot.origin_x},${shot.origin_y}). click/drag with display_id=${shot.display_id} take pixels of this image.`;
+  return [...text(note), ...image(shot.data_url)];
+}
+
+function zoomContent(shot: ZoomResult): Content[] {
+  const of = shot.window_id != null ? `window ${shot.window_id}` : `display ${shot.display_id}`;
+  const keep = shot.window_id != null
+    ? "keep using the last get_app_state pixels for clicks."
+    : "keep using the last screenshot's pixels for clicks.";
+  const note = `zoom of ${of}: ${shot.width}x${shot.height}px at ${shot.scale} px/pt, top-left at global point (${shot.origin_x},${shot.origin_y}). Read-only: ${keep}`;
   return [...text(note), ...image(shot.data_url)];
 }
 
@@ -98,7 +105,8 @@ const server = new McpServer(
     instructions: [
       "Skylight drives native macOS apps. Preferred loop: get_app_state (indexed accessibility tree + screenshot) → act by element_index → get_app_state again to verify.",
       "For anything without a usable accessibility tree, or to see the whole desktop: screenshot → click/drag with display_id and the pixel coordinates you read off that image → zoom to read small text.",
-      "Coordinates are ALWAYS pixels of the most recent image of that target (window capture per app, screenshot per display); the daemon converts them.",
+      "Coordinates are ALWAYS pixels of the most recent image of that target (window capture per app, screenshot per display); the daemon converts them; zoom takes the same pixels (pass app for a window, display_id for a display).",
+      "A control a web UI only renders on hover has no element_index until you hover it: call hover (element_index or x/y), then get_app_state again, then click it.",
       "Actions run in the background by default: the target app is not raised and the user's focus and cursor are untouched, so they can keep working. Actions on different apps run in parallel. Pass background: false only when the app must come to the front.",
       "Apps may be gated by an allowlist (approval_required): tell the user to run `skylight approve \"<App>\"`.",
     ].join("\n"),
@@ -130,6 +138,8 @@ server.registerTool("get_app_state", {
     disable_diff: z.boolean().optional().describe("Return the full tree instead of a diff."),
     max_dimension: z.number().int().optional().describe(`Longest side of the screenshot in px. Default ${MAX_DIMENSION}.`),
     include_screenshot: z.boolean().optional().describe("Default true. false returns only the tree (faster, cheaper)."),
+    max_depth: z.number().int().positive().optional().describe("Tree depth budget, default 60. Raise it (e.g. 120) when the tree truncates with \"max depth … reached\" over the part you need — deep Chromium/Electron web content is the usual cause."),
+    max_nodes: z.number().int().positive().optional().describe("Node budget, default 5000."),
   },
   annotations: { readOnlyHint: true },
 }, (input) => run(async () => {
@@ -139,6 +149,8 @@ server.registerTool("get_app_state", {
     disableDiff: input.disable_diff,
     include_data_url: input.include_screenshot ?? true,
     max_dimension: input.max_dimension ?? MAX_DIMENSION,
+    max_depth: input.max_depth,
+    max_nodes: input.max_nodes,
   });
   return appStateContent(state);
 }));
@@ -153,9 +165,23 @@ server.registerTool("click", {
     display_id: z.number().int().optional().describe("Interpret x/y as pixels of the latest screenshot of this display."),
     mouse_button: z.enum(["left", "right", "middle"]).optional(),
     click_count: z.number().int().min(1).optional().describe("2 = double-click, 3 = triple."),
+    hover: z.boolean().optional().describe("Move the pointer onto the point first. Default true (coordinate clicks only) — a click with no preceding move never reveals hover-only controls."),
     background,
   },
 }, (input) => run(async () => text(await sky.click(input))));
+
+server.registerTool("hover", {
+  description: "Park the pointer over an element or point WITHOUT clicking, then re-capture get_app_state: this is how you reach a control that a web UI only renders on hover (row actions, \"⋯\" menus, tooltips). Background mode posts the move into the app, so the user's real cursor never moves. Same targeting as click: element_index, x/y of the latest get_app_state image, or x/y of the latest screenshot with display_id. Reaches the app's key window only (is_focused in list_windows) — a hover into another window of the same app is dropped; raise that window first.",
+  inputSchema: {
+    app: app.optional(),
+    element_index: z.number().int().optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    display_id: z.number().int().optional().describe("Interpret x/y as pixels of the latest screenshot of this display."),
+    settle_ms: z.number().int().optional().describe("Hold the pointer there this long before returning. Default 250."),
+    background,
+  },
+}, (input) => run(async () => text(await sky.hover(input))));
 
 server.registerTool("press_key", {
   description: "Press a key chord: \"+\"-separated X-keysym names, e.g. \"Return\", \"Cmd+s\", \"Ctrl+Shift+Tab\", \"Escape\". Defaults to the frontmost app.",
@@ -227,20 +253,20 @@ server.registerTool("screenshot", {
   annotations: { readOnlyHint: true },
 }, (input) => run(async () => displayShotContent(
   await sky.screenshot({ ...input, max_dimension: input.max_dimension ?? MAX_DIMENSION, include_data_url: true }),
-  "screenshot",
 )));
 
 server.registerTool("zoom", {
-  description: "Native-resolution crop of a region of the latest screenshot (pixels of that image), to read small text. Read-only: it does not change what click coordinates mean.",
+  description: "Native-resolution crop to read small text. With `app`, the region is pixels of that app's latest get_app_state image (the same coordinates click takes) and the crop comes from that window — use this after get_app_state. Without `app`, it is pixels of the latest `screenshot` of a display. Read-only: it does not change what click coordinates mean.",
   inputSchema: {
+    app: app.optional().describe("Crop this app's window, in pixels of its latest get_app_state image, instead of a display."),
+    window_id: z.number().int().optional().describe("With app: a specific window. Default: the one the latest capture targeted."),
     display_id: displayId,
     x: z.number(), y: z.number(), width: z.number().positive(), height: z.number().positive(),
     max_dimension: z.number().int().optional().describe(`Longest side in px. Default ${MAX_DIMENSION}.`),
   },
   annotations: { readOnlyHint: true },
-}, (input) => run(async () => displayShotContent(
+}, (input) => run(async () => zoomContent(
   await sky.zoom({ ...input, max_dimension: input.max_dimension ?? MAX_DIMENSION, include_data_url: true }),
-  "zoom",
 )));
 
 server.registerTool("read_clipboard", {

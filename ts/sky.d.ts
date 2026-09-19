@@ -121,9 +121,13 @@ export interface DisplayScreenshot {
     origin_y: number;
 }
 export interface ZoomInput {
-    /** Default: the main display. */
+    /** Zoom into this app's window instead of a display: the region is then pixels of its latest get_app_state capture, and the crop comes from a fresh capture of that window (so an occluded window still reads correctly). */
+    app?: AppIdentifier;
+    /** With app: a specific window (from list_windows). Default: the window the latest capture targeted. */
+    window_id?: number;
+    /** Without app: which display. Default: the main display. */
     display_id?: number;
-    /** Region in pixels of the latest screenshot of that display (points if there was none). */
+    /** Region in pixels of the latest image of that target: the display's screenshot (points if there was none), or with app the get_app_state window capture. */
     x: number;
     y: number;
     width: number;
@@ -131,6 +135,21 @@ export interface ZoomInput {
     /** Longest side cap; default: native backing scale. */
     max_dimension?: number;
     include_data_url?: boolean;
+}
+/** A zoomed crop. Exactly one of display_id / window_id says what it came from. */
+export interface ZoomResult {
+    display_id?: number | null;
+    window_id?: number | null;
+    /** file:// path to the PNG. */
+    url: string;
+    data_url?: string | null;
+    width: number;
+    height: number;
+    /** PNG pixels per screen point. */
+    scale: number;
+    /** Global point of pixel (0,0). */
+    origin_x: number;
+    origin_y: number;
 }
 export interface ClipboardResult {
     /** Absent when the pasteboard holds no string. */
@@ -174,6 +193,10 @@ export interface GetAppStateInput {
     include_data_url?: boolean;
     /** Longest side of the screenshot in pixels; downscaled to fit. Click coordinates stay pixels of the returned image. */
     max_dimension?: number;
+    /** Tree depth budget (default 60). Raise it when the tree truncates with a "max depth … reached" marker over the part you need — deep Chromium/Electron web content is the usual cause. */
+    max_depth?: number;
+    /** Node budget (default 5000). */
+    max_nodes?: number;
 }
 export interface ClickInput {
     /** Required with element_index or window coordinates. Optional with display_id: the app under the point is hit-tested (frontmost as fallback). */
@@ -186,6 +209,22 @@ export interface ClickInput {
     display_id?: number;
     mouse_button?: MouseButton;
     click_count?: number;
+    /** Move the pointer onto the point before pressing (default true; coordinate clicks only — an element_index click is an AX press). Hover-only affordances never render without it. */
+    hover?: boolean;
+    /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
+    background?: boolean;
+}
+/** Park the pointer over an element or point without clicking, so hover-only UI renders for the next capture. In background mode the user's real cursor never moves. Reaches the app's KEY window only — a hover into another window of the same app is dropped. */
+export interface HoverInput {
+    /** Required with element_index or window coordinates; optional with display_id. */
+    app?: AppIdentifier;
+    element_index?: number;
+    x?: number;
+    y?: number;
+    /** Interpret x/y as pixels of the latest `screenshot` of this display. */
+    display_id?: number;
+    /** Hold the pointer there this long before returning. Default 250, capped at 5000. */
+    settle_ms?: number;
     /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
     background?: boolean;
 }
@@ -251,7 +290,7 @@ export interface SelectTextInput {
     /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
     background?: boolean;
 }
-import type { ActionResult, AppState, BringToActiveSpaceInput, BringToActiveSpaceResult, CapabilitiesResult, ClickInput, ClipboardResult, DisplayScreenshot, DragInput, GetAppStateInput, ListAppsInput, ListAppsResult, ListDisplaysResult, ListWindowsInput, ListWindowsResult, PerformSecondaryActionInput, PressKeyInput, ScreenshotInput, ScrollInput, SelectTextInput, SetValueInput, TypeTextInput, WriteClipboardInput, ZoomInput } from "./types.js";
+import type { ActionResult, AppState, BringToActiveSpaceInput, BringToActiveSpaceResult, CapabilitiesResult, ClickInput, ClipboardResult, DisplayScreenshot, DragInput, GetAppStateInput, HoverInput, ListAppsInput, ListAppsResult, ListDisplaysResult, ListWindowsInput, ListWindowsResult, PerformSecondaryActionInput, PressKeyInput, ScreenshotInput, ScrollInput, SelectTextInput, SetValueInput, TypeTextInput, WriteClipboardInput, ZoomInput, ZoomResult } from "./types.js";
 export interface SkyConfig {
     socket_path: string;
     post_action_sleep_ms: number;
@@ -299,6 +338,8 @@ export declare class SkyClient {
     list_windows(input: ListWindowsInput): Promise<ListWindowsResult>;
     get_app_state(input: GetAppStateInput): Promise<AppState>;
     click(input: ClickInput): Promise<ActionResult>;
+    /** Move the pointer onto an element or point and hold it there — reveals hover-only UI for the next get_app_state. Clicks nothing. */
+    hover(input: HoverInput): Promise<ActionResult>;
     press_key(input: PressKeyInput): Promise<ActionResult>;
     type_text(input: TypeTextInput): Promise<ActionResult>;
     scroll(input: ScrollInput): Promise<ActionResult>;
@@ -310,8 +351,8 @@ export declare class SkyClient {
     list_displays(): Promise<ListDisplaysResult>;
     /** Whole-display capture (default 1 px per point). Pixel coordinates from it go to click/drag with display_id. */
     screenshot(input?: ScreenshotInput): Promise<DisplayScreenshot>;
-    /** Native-resolution crop of a region of the latest screenshot; read-only (does not change click geometry). */
-    zoom(input: ZoomInput): Promise<DisplayScreenshot>;
+    /** Native-resolution crop of a region of the latest screenshot of a display, or with `app` of that app's latest get_app_state window capture; read-only (does not change click geometry). */
+    zoom(input: ZoomInput): Promise<ZoomResult>;
     read_clipboard(): Promise<ClipboardResult>;
     write_clipboard(input: WriteClipboardInput): Promise<ActionResult>;
     /** Move a window onto the active Space without switching Spaces. */

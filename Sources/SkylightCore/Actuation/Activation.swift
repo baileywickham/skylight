@@ -134,7 +134,11 @@ public func deliversSyntheticEvents(action: ActuatorAction) -> Bool {
     switch action {
     case .coordinateClick, .pressKey, .typeText, .scroll, .drag:
         return true
-    case .elementClick, .setValue, .performSecondaryAction, .selectText:
+    // `hover` posts a pointer move but stays out of this list: the focus flip
+    // does not make a non-key window accept hover (verified live — the window
+    // does become key and the move is still dropped), so paying with the
+    // user's frontmost app going inactive would buy nothing.
+    case .elementClick, .setValue, .performSecondaryAction, .selectText, .hover:
         return false
     }
 }
@@ -143,6 +147,7 @@ public func deliversSyntheticEvents(action: ActuatorAction) -> Bool {
 public enum ActuatorAction: Equatable {
     case elementClick
     case coordinateClick
+    case hover
     case pressKey
     case typeText
     case scroll

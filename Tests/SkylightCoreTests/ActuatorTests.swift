@@ -205,4 +205,16 @@ final class ActuatorTests: XCTestCase {
         XCTAssertTrue(bg.effectiveBackground(nil), "no override: daemon default (background)")
         XCTAssertFalse(bg.effectiveBackground(false), "request opts OUT of background")
     }
+
+    // MARK: - Hover
+
+    func testHoverSettleDefaultsAndClamps() {
+        XCTAssertEqual(hoverSettleMs(nil), 250)
+        XCTAssertEqual(hoverSettleMs(500), 500)
+        XCTAssertEqual(hoverSettleMs(0), 0)
+        // A hover holds the app's actuation slot for its whole settle, so a
+        // caller cannot park one there for a minute.
+        XCTAssertEqual(hoverSettleMs(60_000), 5_000)
+        XCTAssertEqual(hoverSettleMs(-1), 0)
+    }
 }

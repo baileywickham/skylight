@@ -72,15 +72,37 @@ final class SerializerTests: XCTestCase {
                       "the first node AT the cap (depth == maxDepth) must be truncated, not emitted")
         XCTAssertFalse(out.text.contains("Depth4"))
         XCTAssertFalse(out.text.contains("Depth5"))
-        XCTAssertTrue(out.text.contains("[…] truncated (max depth 3 reached)"))
+        XCTAssertTrue(out.text.contains("[…] truncated (max depth 3 reached; raise with max_depth)"))
     }
 
     func testNodeCapEmitsTruncationMarker() {
         let kids = (0..<10).map { FixtureNode("k\($0)", "AXButton", title: "B\($0)") }
         let tree = FixtureNode("w", "AXWindow", kids: kids)
         let out = AXTreeSerializer(caps: TreeCaps(maxDepth: 30, maxNodes: 4)).serialize(root: tree, map: ElementIndexMap())
-        XCTAssertTrue(out.text.contains("[…] truncated (max nodes 4 reached)"))
+        XCTAssertTrue(out.text.contains("[…] truncated (max nodes 4 reached; raise with max_nodes)"))
         XCTAssertEqual(out.lines.filter { $0.index >= 0 }.count, 4)
+    }
+
+    /// The default is deliberately deeper than any AppKit hierarchy needs:
+    /// Chromium/Electron web content is what actually hits a depth cap, and
+    /// truncating there hides the nested controls agents come for.
+    func testStandardCapsAllowDeepWebTrees() {
+        XCTAssertEqual(TreeCaps.standard.maxDepth, 60)
+        XCTAssertEqual(TreeCaps.standard.maxNodes, 5000)
+    }
+
+    func testOverriddenCapsKeepUnsetValuesAndClampTheRest() {
+        let caps = TreeCaps.standard
+        XCTAssertEqual(caps.overridden(maxDepth: nil, maxNodes: nil), caps)
+        XCTAssertEqual(caps.overridden(maxDepth: 120, maxNodes: nil),
+                       TreeCaps(maxDepth: 120, maxNodes: caps.maxNodes))
+        XCTAssertEqual(caps.overridden(maxDepth: nil, maxNodes: 9000),
+                       TreeCaps(maxDepth: caps.maxDepth, maxNodes: 9000))
+        // One request must not be able to ask for an unbounded walk.
+        XCTAssertEqual(caps.overridden(maxDepth: 10_000, maxNodes: 10_000_000),
+                       TreeCaps(maxDepth: 200, maxNodes: 50_000))
+        XCTAssertEqual(caps.overridden(maxDepth: 0, maxNodes: -5),
+                       TreeCaps(maxDepth: 1, maxNodes: 1))
     }
 
     func testTruncationMarkerLinesHaveIndexMinusOne() {

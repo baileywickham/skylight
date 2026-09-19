@@ -4,11 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type {
   ActionResult, AppState, BringToActiveSpaceInput, BringToActiveSpaceResult, CapabilitiesResult,
-  ClickInput, ClipboardResult, DisplayScreenshot, DragInput, GetAppStateInput,
+  ClickInput, ClipboardResult, DisplayScreenshot, DragInput, GetAppStateInput, HoverInput,
   ListAppsInput, ListAppsResult, ListDisplaysResult,
   ListWindowsInput, ListWindowsResult,
   PerformSecondaryActionInput, PressKeyInput, ScreenshotInput, ScrollInput, SelectTextInput,
-  SetValueInput, TypeTextInput, WriteClipboardInput, ZoomInput,
+  SetValueInput, TypeTextInput, WriteClipboardInput, ZoomInput, ZoomResult,
 } from "./types.js";
 
 // NOTE: shots_dir is intentionally NOT part of SkyConfig: the client never
@@ -188,6 +188,8 @@ export class SkyClient {
   list_windows(input: ListWindowsInput): Promise<ListWindowsResult> { return this.call("list_windows", input); }
   get_app_state(input: GetAppStateInput): Promise<AppState> { return this.call("get_app_state", input); }
   click(input: ClickInput): Promise<ActionResult> { return this.call("click", input); }
+  /** Move the pointer onto an element or point and hold it there — reveals hover-only UI for the next get_app_state. Clicks nothing. */
+  hover(input: HoverInput): Promise<ActionResult> { return this.call("hover", input); }
   press_key(input: PressKeyInput): Promise<ActionResult> { return this.call("press_key", input); }
   type_text(input: TypeTextInput): Promise<ActionResult> { return this.call("type_text", input); }
   scroll(input: ScrollInput): Promise<ActionResult> { return this.call("scroll", input); }
@@ -202,8 +204,8 @@ export class SkyClient {
   list_displays(): Promise<ListDisplaysResult> { return this.call("list_displays", {}); }
   /** Whole-display capture (default 1 px per point). Pixel coordinates from it go to click/drag with display_id. */
   screenshot(input?: ScreenshotInput): Promise<DisplayScreenshot> { return this.call("screenshot", input ?? {}); }
-  /** Native-resolution crop of a region of the latest screenshot; read-only (does not change click geometry). */
-  zoom(input: ZoomInput): Promise<DisplayScreenshot> { return this.call("zoom", input); }
+  /** Native-resolution crop of a region of the latest screenshot of a display, or with `app` of that app's latest get_app_state window capture; read-only (does not change click geometry). */
+  zoom(input: ZoomInput): Promise<ZoomResult> { return this.call("zoom", input); }
   read_clipboard(): Promise<ClipboardResult> { return this.call("read_clipboard", {}); }
   write_clipboard(input: WriteClipboardInput): Promise<ActionResult> { return this.call("write_clipboard", input); }
   /** Move a window onto the active Space without switching Spaces. */

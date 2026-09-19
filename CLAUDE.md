@@ -171,13 +171,42 @@ real executable path, since it runs via a brew-bin symlink.
   re-commits the geometry with the returned scale, so image and click math
   never disagree). With `display_id` the same formula runs against
   `DisplayGeometryStore`'s latest `screenshot` of that display (default 1 px per
-  point). `zoom` is read-only and never changes click geometry.
+  point). `zoom` is read-only and never changes click geometry. `zoom` takes
+  either space: with `app` the region is pixels of that app's latest
+  `get_app_state` image and the crop comes from a fresh capture of that window
+  (so it is unaffected by what sits on top of it); without, it is pixels of the
+  display's latest `screenshot`. Mixing them up used to be silent — window
+  pixels read as display pixels cropped whatever app happened to be at those
+  global coordinates.
 - **Sticky indices:** `element_index` values are stable per element across
   captures (keyed by CFEqual/CFHash), never reused. This is what makes diffing
   coherent and index→element resolution work. All map access stays on the serial queue.
 - **AX robustness:** set `AXUIElementSetMessagingTimeout`; Chromium/Electron apps
   expose an empty tree until `AXManualAccessibility`/`AXEnhancedUserInterface` is
   set (first capture polls for the web area); node/depth caps with truncation markers.
+  Depth defaults to **60** because web content nests far deeper than AppKit ever
+  does, and `get_app_state` takes `max_depth`/`max_nodes` per request — the
+  markers name the knob that lifts them.
+- **Hover is a first-class action.** A web UI that renders a control only on
+  hover (row actions, "⋯" menus) has no AX node for it until the pointer is
+  over it, and background actuation never moves the cursor — so before this
+  existed, such a control was simply unreachable (a pixel click at its spot
+  hits whatever is behind it). `hover` posts two `mouseMoved` events one pixel
+  apart (an app tracks hover by move DELTAS; a single event at the position it
+  already believes the pointer occupies can be coalesced away) and holds for
+  `settle_ms`. In background mode they go per-pid, so the app sees a pointer
+  the user's real cursor never followed, and the hover state persists — nothing
+  moves it away. Coordinate `click` posts the same move before pressing
+  (`hover: false` opts out), with a 150ms settle: verified live that without it
+  the press lands on the row BEHIND a button the same move just created. The
+  reliable sequence for a hover-only control is still hover → get_app_state →
+  click by `element_index`.
+  **It reaches the app's KEY window only.** A move posted into another window
+  of the same app is dropped — verified live in both Chromium and WebKit, and
+  making that window key first (focus-without-raise) does not help, so the
+  window's renderer looks to be the thing ignoring input while it is in the
+  background. Hover a window the user is actually looking at, or raise it
+  first.
 - **TCC / signing:** the daemon must be launched via its LaunchAgent or `open -a`,
   **never as a terminal child** (TCC attributes the grant to the responsible
   process otherwise). Sign with a **stable identity** (not ad-hoc — ad-hoc cdhash
@@ -219,17 +248,19 @@ background mode is fully reliable on a given macOS build),
 apps tagged `menu_bar_only` — always resolvable by name regardless),
 `list_windows` (per-app windows with CGWindowIDs), `get_app_state`
 (AX text + screenshot; diffs by default, `disableDiff` forces full; `window_id`
-targets a non-focused window; degrades to AX-only + `screenshot_error` when the
+targets a non-focused window; `max_depth`/`max_nodes` lift the tree caps; degrades to AX-only + `screenshot_error` when the
 screenshot fails; window-less menu-bar apps capture a synthetic `AXMenuBarApp`
 root over the status item + open popover — see `AX/MenuBarApp.swift` for the
-popover's key-status-dependent attachment quirk), `click` (element_index OR x/y),
-`press_key`, `type_text`,
+popover's key-status-dependent attachment quirk), `click` (element_index OR x/y,
+with a pointer move before the press unless `hover: false`), `hover` (park the
+pointer on an element or point without clicking, so hover-only UI renders for
+the next capture), `press_key`, `type_text`,
 `scroll`, `set_value`, `drag`, `perform_secondary_action`, `select_text`, plus
 `ping`/`echo`. Every action takes optional `background` (per-request override of the
 daemon default; `false` activates the app first). Pixel path: `list_displays`, `screenshot` (whole
 display, default 1 px/pt, `max_dimension` cap, cursor shown), `zoom` (native
-crop of a region of the latest screenshot), and `click`/`drag` with
-`display_id`. Also `read_clipboard`/`write_clipboard` (not app-scoped, so not
+crop of a region of the latest screenshot — or of an app's latest window
+capture when it is given an `app`), and `click`/`drag` with `display_id`. Also `read_clipboard`/`write_clipboard` (not app-scoped, so not
 approval-gated; the write is audited) and `bring_to_active_space`.
 `get_app_state` accepts `max_dimension` too. `list_windows` reports
 `is_on_active_space` when the Spaces bridge resolved. Actuation is gated by the opt-in per-app allowlist in

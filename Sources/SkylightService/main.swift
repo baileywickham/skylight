@@ -139,7 +139,9 @@ router.register("list_windows", handle("list_windows", ListWindowsInput.self) { 
 router.register("get_app_state", handle("get_app_state", GetAppStateInput.self) { input in
     let app = try registry.resolve(input.app)
     let captured = try axCapture.capture(app: app, windowID: input.window_id,
-                                         disableDiff: input.disableDiff ?? false)
+                                         disableDiff: input.disableDiff ?? false,
+                                         caps: TreeCaps.standard.overridden(maxDepth: input.max_depth,
+                                                                            maxNodes: input.max_nodes))
     // AX-only fallback: a failed screenshot (Screen Recording ungranted or
     // lapsed — macOS 15 re-prompts periodically — or a transient SCK error)
     // degrades the response instead of failing it; the model still gets the
@@ -183,6 +185,12 @@ router.register("click", actuation("click", ClickInput.self,
         return "\($0.app ?? "<implicit>")[\($0.element_index.map(String.init) ?? "@\($0.x ?? -1),\($0.y ?? -1)\(space)")]"
     },
     actuator.click))
+router.register("hover", actuation("hover", HoverInput.self,
+    target: {
+        let space = $0.display_id.map { "display:\($0)" } ?? ""
+        return "\($0.app ?? "<implicit>")[\($0.element_index.map(String.init) ?? "@\($0.x ?? -1),\($0.y ?? -1)\(space)")]"
+    },
+    actuator.hover))
 router.register("press_key", actuation("press_key", PressKeyInput.self,
     target: { "\($0.app ?? "<frontmost>") keys=\($0.keys)" }, actuator.pressKey))
 router.register("type_text", actuation("type_text", TypeTextInput.self,
@@ -208,7 +216,31 @@ router.register("screenshot", handle("screenshot", ScreenshotInput.self) { input
     return result
 })
 router.register("zoom", handle("zoom", ZoomInput.self) { input in
-    try awaitResult { try await screenshotter.zoom(input) }
+    // With `app`, the region is pixels of that app's latest get_app_state
+    // image, so the crop must come from the SAME window that capture targeted
+    // — the geometry it was computed against is the only thing that makes the
+    // coordinates mean anything.
+    guard let appIdentifier = input.app else {
+        return try awaitResult { try await screenshotter.zoom(input) }
+    }
+    let app = try registry.resolve(appIdentifier)
+    guard let geometry = axCapture.latestGeometry(forPid: app.processIdentifier) else {
+        throw SkyServiceError(code: .invalidParams,
+                              message: "no prior capture for '\(appIdentifier)' — zoom coordinates are get_app_state pixels; call get_app_state first")
+    }
+    let wantedID = input.window_id ?? axCapture.latestWindowID(forPid: app.processIdentifier)
+    let window: AXUIElement
+    if let wantedID, let listing = try axCapture.windowListings(of: app).first(where: { $0.info.window_id == wantedID }) {
+        window = listing.element
+    } else if input.window_id != nil {
+        throw SkyServiceError(code: .invalidParams,
+                              message: "window_id \(input.window_id!) not found for '\(appIdentifier)' — call list_windows for current ids")
+    } else {
+        window = try axCapture.focusedWindow(of: app)
+    }
+    return try awaitResult {
+        try await screenshotter.zoomWindow(window: window, windowID: wantedID, geometry: geometry, input: input)
+    }
 })
 
 // Clipboard: not app-scoped, so not approval-gated; the write is audited.

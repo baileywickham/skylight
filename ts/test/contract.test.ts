@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { buildRequest } from "../src/client.js";
 import type {
   ActionResult, AppState, BringToActiveSpaceResult, CapabilitiesResult, ClipboardResult, DisplayScreenshot,
-  ListAppsResult, ListDisplaysResult, ListWindowsResult,
+  ListAppsResult, ListDisplaysResult, ListWindowsResult, ZoomResult,
 } from "../src/types.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -62,6 +62,12 @@ describe("contract", () => {
         expect(typeof r.url).toBe("string");
         expect(typeof r.scale).toBe("number");
         expect(typeof r.origin_x).toBe("number");
+      } else if (resp.decodes_to === "ZoomResult") {
+        const r = resp.json as ZoomResult;
+        expect(typeof r.url).toBe("string");
+        expect(typeof r.scale).toBe("number");
+        // Exactly one target: a display region or a window crop.
+        expect((r.display_id == null) !== (r.window_id == null)).toBe(true);
       } else if (resp.decodes_to === "ClipboardResult") {
         const r = resp.json as ClipboardResult;
         expect(Array.isArray(r.types)).toBe(true);

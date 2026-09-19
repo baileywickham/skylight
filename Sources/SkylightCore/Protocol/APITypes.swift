@@ -159,19 +159,31 @@ public struct DisplayScreenshotResult: Codable, Equatable {
 }
 
 public struct ZoomInput: Codable, Equatable {
-    /// Default: the main display.
+    /// Zoom into this app's window instead of a display: the region is then
+    /// pixels of its latest `get_app_state` capture — the same coordinates
+    /// click/drag take — and the crop comes from a fresh capture of that
+    /// window, so an occluded or background window still reads correctly.
+    public let app: String?
+    /// With `app`: a specific window (id from list_windows). Default: the
+    /// window the latest capture targeted.
+    public let window_id: Int?
+    /// Without `app`: which display. Default: the main display.
     public let display_id: Int?
-    /// Region in pixels of the latest `screenshot` of that display (points when
-    /// there has been none).
+    /// Region in pixels of the latest image of that target: the `screenshot`
+    /// of the display (points when there has been none), or with `app` the
+    /// `get_app_state` window capture.
     public let x: Double
     public let y: Double
     public let width: Double
     public let height: Double
-    /// Longest side cap; default: the display's native backing scale.
+    /// Longest side cap; default: the target's native backing scale.
     public let max_dimension: Int?
     public let include_data_url: Bool?
-    public init(display_id: Int? = nil, x: Double, y: Double, width: Double, height: Double,
+    public init(app: String? = nil, window_id: Int? = nil, display_id: Int? = nil,
+                x: Double, y: Double, width: Double, height: Double,
                 max_dimension: Int? = nil, include_data_url: Bool? = nil) {
+        self.app = app
+        self.window_id = window_id
         self.display_id = display_id
         self.x = x
         self.y = y
@@ -179,6 +191,33 @@ public struct ZoomInput: Codable, Equatable {
         self.height = height
         self.max_dimension = max_dimension
         self.include_data_url = include_data_url
+    }
+}
+
+/// A zoomed crop. Exactly one of `display_id` / `window_id` identifies what it
+/// came from; `origin_x/y` is the global point of pixel (0,0) either way.
+public struct ZoomResult: Codable, Equatable {
+    public let display_id: Int?
+    public let window_id: Int?
+    public let url: String
+    public let data_url: String?
+    public let width: Int
+    public let height: Int
+    /// PNG pixels per screen point.
+    public let scale: Double
+    public let origin_x: Double
+    public let origin_y: Double
+    public init(display_id: Int? = nil, window_id: Int? = nil, url: String, data_url: String?,
+                width: Int, height: Int, scale: Double, origin_x: Double, origin_y: Double) {
+        self.display_id = display_id
+        self.window_id = window_id
+        self.url = url
+        self.data_url = data_url
+        self.width = width
+        self.height = height
+        self.scale = scale
+        self.origin_x = origin_x
+        self.origin_y = origin_y
     }
 }
 
@@ -266,13 +305,21 @@ public struct GetAppStateInput: Codable, Equatable {
     /// native backing scale. Click/drag coordinates stay pixels of the image
     /// returned, whatever the scale.
     public let max_dimension: Int?
+    /// Tree depth budget for this capture (default 60). Raise it when the tree
+    /// comes back with a "max depth … reached" marker over the part you need —
+    /// deep Chromium/Electron web content is the usual cause.
+    public let max_depth: Int?
+    /// Node budget for this capture (default 5000).
+    public let max_nodes: Int?
     public init(app: String, window_id: Int? = nil, disableDiff: Bool? = nil, include_data_url: Bool? = nil,
-                max_dimension: Int? = nil) {
+                max_dimension: Int? = nil, max_depth: Int? = nil, max_nodes: Int? = nil) {
         self.app = app
         self.window_id = window_id
         self.disableDiff = disableDiff
         self.include_data_url = include_data_url
         self.max_dimension = max_dimension
+        self.max_depth = max_depth
+        self.max_nodes = max_nodes
     }
 }
 
@@ -289,12 +336,17 @@ public struct ClickInput: Codable, Equatable {
     public let display_id: Int?
     public let mouse_button: String?   // "left" | "right" | "middle"
     public let click_count: Int?
+    /// Move the pointer onto the point before pressing (default true, and only
+    /// for coordinate clicks — an element_index click is an AX press, which has
+    /// no pointer). A real click always follows a pointer move, and hover-only
+    /// affordances never render without one. Pass false to press without it.
+    public let hover: Bool?
     /// Per-request background override: true = never activate / post per-pid,
     /// false = force activation, absent = daemon default (`skylight background`).
     public let background: Bool?
     public init(app: String? = nil, element_index: Int? = nil, x: Double? = nil, y: Double? = nil,
                 display_id: Int? = nil, mouse_button: String? = nil, click_count: Int? = nil,
-                background: Bool? = nil) {
+                hover: Bool? = nil, background: Bool? = nil) {
         self.app = app
         self.element_index = element_index
         self.x = x
@@ -302,6 +354,37 @@ public struct ClickInput: Codable, Equatable {
         self.display_id = display_id
         self.mouse_button = mouse_button
         self.click_count = click_count
+        self.hover = hover
+        self.background = background
+    }
+}
+
+/// Park the pointer over an element or point without clicking, so hover-only
+/// UI (Chromium/Electron row affordances, tooltips, hover menus) renders and
+/// the next `get_app_state` can see it. In background mode the event is posted
+/// into the app and the user's real cursor never moves.
+public struct HoverInput: Codable, Equatable {
+    /// Required for element_index and window-coordinate hovers; optional with
+    /// display_id (the app under the point is hit-tested).
+    public let app: String?
+    public let element_index: Int?
+    public let x: Double?
+    public let y: Double?
+    /// When set, x/y are pixels of the latest `screenshot` of this display.
+    public let display_id: Int?
+    /// Milliseconds to hold the pointer there before returning, so a hover
+    /// that animates in has landed by the time the caller re-captures.
+    /// Default 250, capped at 5000.
+    public let settle_ms: Int?
+    public let background: Bool?
+    public init(app: String? = nil, element_index: Int? = nil, x: Double? = nil, y: Double? = nil,
+                display_id: Int? = nil, settle_ms: Int? = nil, background: Bool? = nil) {
+        self.app = app
+        self.element_index = element_index
+        self.x = x
+        self.y = y
+        self.display_id = display_id
+        self.settle_ms = settle_ms
         self.background = background
     }
 }

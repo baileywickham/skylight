@@ -51,6 +51,21 @@ public func captureScale(pointSize: CGSize, preferred: Double, maxDimension: Int
     return min(preferred, Double(maxDimension) / longest)
 }
 
+/// Crop rectangle, in pixels of a freshly captured window image, for a region
+/// the caller expressed in pixels of the window's latest `get_app_state`
+/// image. The two images can differ in scale (that capture may have been
+/// downscaled by `max_dimension`), so the region is rescaled by the ratio and
+/// clipped to the image; an empty result means the region lies off-window.
+/// Pure so the conversion is a table in the tests rather than a live capture.
+public func windowCropRect(x: Double, y: Double, width: Double, height: Double,
+                           capturedScale: Double, imageScale: Double,
+                           imageSize: CGSize) -> CGRect {
+    guard capturedScale > 0 else { return .zero }
+    let ratio = imageScale / capturedScale
+    let rect = CGRect(x: x * ratio, y: y * ratio, width: width * ratio, height: height * ratio)
+    return rect.intersection(CGRect(origin: .zero, size: imageSize)).integral
+}
+
 /// Global point of a pixel in a display screenshot. Same contract as
 /// `globalPoint(fromScreenshotX:y:geometry:)`: origin + px / scale.
 public func displayGlobalPoint(x: Double, y: Double, geometry: CaptureGeometry) -> CGPoint {
@@ -177,7 +192,7 @@ public final class Screenshotter {
     /// is given in pixels of the latest `screenshot` of the display (points if
     /// there was none). Read-only: it does NOT change the click geometry, so
     /// coordinates for click/drag keep referring to the last `screenshot`.
-    public func zoom(_ input: ZoomInput) async throws -> DisplayScreenshotResult {
+    public func zoom(_ input: ZoomInput) async throws -> ZoomResult {
         try requireScreenRecording()
         guard input.width > 0, input.height > 0 else {
             throw SkyServiceError(code: .invalidParams, message: "zoom: width and height must be positive")
@@ -208,7 +223,7 @@ public final class Screenshotter {
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
         let actualScale = local.width > 0 ? Double(image.width) / local.width : scale
         let url = try writeShot(image, prefix: "zoom-\(display.displayID)")
-        return DisplayScreenshotResult(
+        return ZoomResult(
             display_id: Int(display.displayID), url: url.absoluteString,
             data_url: input.include_data_url ?? false ? try pngDataURL(image) : nil,
             width: image.width, height: image.height, scale: actualScale,
@@ -222,6 +237,76 @@ public final class Screenshotter {
     /// source of truth for both — see the coordinate contract).
     public func capture(window: AXUIElement, includeDataURL: Bool,
                         maxDimension: Int? = nil) async throws -> ScreenshotResult {
+        let (image, actualScale) = try await captureWindowImage(window: window, maxDimension: maxDimension)
+        let url = try writeShot(image, prefix: "shot")
+        return ScreenshotResult(
+            url: url.absoluteString,
+            data_url: includeDataURL ? try pngDataURL(image) : nil,
+            width: image.width,
+            height: image.height,
+            scale: actualScale)
+    }
+
+    /// Native-resolution crop of part of a window, in pixels of that window's
+    /// latest `get_app_state` image (`geometry`) — the same coordinates
+    /// click/drag take, so a region read off the tree's screenshot zooms
+    /// without converting anything by hand. The crop comes from a fresh
+    /// capture of the window itself, not of the display, so an occluded or
+    /// background window still reads correctly. Read-only: the click geometry
+    /// is untouched.
+    public func zoomWindow(window: AXUIElement, windowID: Int?, geometry: CaptureGeometry,
+                           input: ZoomInput) async throws -> ZoomResult {
+        guard input.width > 0, input.height > 0 else {
+            throw SkyServiceError(code: .invalidParams, message: "zoom: width and height must be positive")
+        }
+        // No max_dimension: capture at the window's native backing scale, then
+        // crop — downscaling first would throw away exactly the detail a zoom
+        // is for. `max_dimension` caps the CROP below.
+        let (image, imageScale) = try await captureWindowImage(window: window, maxDimension: nil)
+        let rect = windowCropRect(x: input.x, y: input.y, width: input.width, height: input.height,
+                                  capturedScale: geometry.scale, imageScale: imageScale,
+                                  imageSize: CGSize(width: image.width, height: image.height))
+        guard !rect.isEmpty, let cropped = image.cropping(to: rect) else {
+            throw SkyServiceError(code: .invalidParams,
+                                  message: "zoom: region lies outside the window capture (\(image.width)x\(image.height)px at \(imageScale) px/pt)")
+        }
+        let final = try downscale(cropped, maxDimension: input.max_dimension)
+        let finalScale = imageScale * Double(final.width) / Double(cropped.width)
+        let url = try writeShot(final, prefix: "zoom-window")
+        return ZoomResult(
+            window_id: windowID, url: url.absoluteString,
+            data_url: input.include_data_url ?? false ? try pngDataURL(final) : nil,
+            width: final.width, height: final.height, scale: finalScale,
+            origin_x: geometry.windowOriginX + rect.origin.x / imageScale,
+            origin_y: geometry.windowOriginY + rect.origin.y / imageScale)
+    }
+
+    /// Redraws `image` with its longest side at most `maxDimension`; returns it
+    /// unchanged when it already fits (or no cap was asked for).
+    private func downscale(_ image: CGImage, maxDimension: Int?) throws -> CGImage {
+        let scale = captureScale(pointSize: CGSize(width: image.width, height: image.height),
+                                 preferred: 1.0, maxDimension: maxDimension)
+        guard scale < 1.0 else { return image }
+        let width = max(1, Int((Double(image.width) * scale).rounded()))
+        let height = max(1, Int((Double(image.height) * scale).rounded()))
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) else {
+            throw SkyServiceError(code: .captureFailed, message: "zoom: cannot allocate a \(width)x\(height) context")
+        }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let resized = context.makeImage() else {
+            throw SkyServiceError(code: .captureFailed, message: "zoom: downscale failed")
+        }
+        return resized
+    }
+
+    /// The window crop itself: the image plus the pixels-per-point it came back
+    /// at. Shared by `capture` (which writes it as the state screenshot) and
+    /// `zoomWindow` (which crops it).
+    private func captureWindowImage(window: AXUIElement,
+                                    maxDimension: Int?) async throws -> (CGImage, Double) {
         try requireScreenRecording()
         // SCK cannot capture a minimized window; unminimize (activation-first
         // policy — actions would need it visible anyway) and let it settle.
@@ -263,13 +348,7 @@ public final class Screenshotter {
         config.captureResolution = .best
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
         let actualScale = scWindow.frame.width > 0 ? Double(image.width) / scWindow.frame.width : scale
-        let url = try writeShot(image, prefix: "shot")
-        return ScreenshotResult(
-            url: url.absoluteString,
-            data_url: includeDataURL ? try pngDataURL(image) : nil,
-            width: image.width,
-            height: image.height,
-            scale: actualScale)
+        return (image, actualScale)
     }
 
     /// Best-effort fallback when _AXUIElementGetWindow is unavailable: match the

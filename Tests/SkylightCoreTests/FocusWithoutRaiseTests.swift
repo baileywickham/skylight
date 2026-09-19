@@ -69,7 +69,9 @@ final class FocusWithoutRaiseTests: XCTestCase {
         for action: ActuatorAction in [.coordinateClick, .pressKey, .typeText, .scroll, .drag] {
             XCTAssertTrue(deliversSyntheticEvents(action: action), "\(action)")
         }
-        for action: ActuatorAction in [.elementClick, .setValue, .performSecondaryAction, .selectText] {
+        // `hover` posts an event but is not here: the focus flip does not make
+        // a non-key window accept a hover, so it would disturb for nothing.
+        for action: ActuatorAction in [.elementClick, .setValue, .performSecondaryAction, .selectText, .hover] {
             XCTAssertFalse(deliversSyntheticEvents(action: action), "\(action)")
         }
     }
