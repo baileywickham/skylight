@@ -17,7 +17,7 @@
  *
  *   cd ts && npx tsx live/fixes-check.mts ["Google Chrome"]
  *
- * Expect six PASS lines and no FAIL.
+ * Every line must say PASS.
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -49,7 +49,8 @@ document.getElementById("target").addEventListener("click", (e) => {
   // the click about the window's midline still increments a counter on a
   // full-height target, and that is exactly how v0.3.7 shipped broken.
   document.getElementById("where").textContent =
-    "clientY=" + Math.round(e.clientY) + " innerH=" + window.innerHeight;
+    "clientX=" + Math.round(e.clientX) + " clientY=" + Math.round(e.clientY) +
+    " innerH=" + window.innerHeight;
 });
 </script>
 <section aria-label="Noisy pane"><div id="tick" aria-label="ticker">tick 0</div></section>
@@ -71,6 +72,14 @@ const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "skylight-fixes-"))
 fs.writeFileSync(file, page);
 execFileSync("/usr/bin/open", ["-a", app, `file://${file}`]);
 await new Promise((r) => setTimeout(r, 3500));
+// Move the window OFF the display origin. With a window at (0,0), global and
+// window-local coordinates are the same number and a whole class of coordinate
+// bug — using one where the other belongs — passes unnoticed.
+if (app === "Google Chrome") {
+  execFileSync("/usr/bin/osascript",
+    ["-e", 'tell application "Google Chrome" to set bounds of front window to {140, 110, 1140, 810}']);
+  await new Promise((r) => setTimeout(r, 800));
+}
 
 const full = async () => (await sky.get_app_state({ app, disableDiff: true, include_data_url: false })).text;
 const lineFor = (t: string, re: RegExp) => t.split("\n").map((l) => l.trim()).find((l) => re.test(l));
@@ -136,11 +145,12 @@ const frontBefore = frontmost();
 const shot = (await sky.get_app_state({ app, disableDiff: true, include_data_url: false })).screenshot;
 if (shot == null) throw new Error("no screenshot: coordinate clicks need capture geometry");
 const before = lineFor(await full(), /clicks: \d+/) ?? "";
-// Above the window's midline but below the fields at the top of the page: a
-// mirrored click then lands ~150pt away, far outside the tolerance below,
-// instead of passing by accident on a tall target.
+// Above the window's midline but below the fields at the top of the page, so a
+// mirrored click lands ~150pt away instead of passing on a tall target. And off
+// centre in x: aiming at width/2 makes an x mirror invisible.
 const aimY = shot.height * 0.45;
-await sky.click({ app, x: shot.width / 2, y: aimY });
+const aimX = shot.width * 0.32;
+await sky.click({ app, x: aimX, y: aimY });
 const afterTree = await full();
 const after = lineFor(afterTree, /clicks: \d+/) ?? "";
 const frontAfter = frontmost();
@@ -156,10 +166,40 @@ const innerH = Number(where.match(/innerH=(\d+)/)?.[1] ?? NaN);
 const scale = shot.scale ?? 2;
 const chromeHeight = shot.height / scale - innerH;   // toolbar + bookmarks, in points
 const expected = aimY / scale - chromeHeight;
+const landedX = Number(where.match(/clientX=(-?\d+)/)?.[1] ?? NaN);
+const expectedX = aimX / scale;
 check("background click lands where it was aimed",
-  Number.isFinite(landed) && Math.abs(landed - expected) <= 12,
-  `expected clientY≈${Math.round(expected)}, got ${landed} (mirrored would be ≈${Math.round(innerH - expected)})`);
+  Number.isFinite(landed) && Math.abs(landed - expected) <= 12
+    && Number.isFinite(landedX) && Math.abs(landedX - expectedX) <= 12,
+  `expected clientX≈${Math.round(expectedX)},clientY≈${Math.round(expected)}; `
+  + `got ${landedX},${landed} (y mirrored would be ≈${Math.round(innerH - expected)})`);
 check("background click did not steal focus",
   frontBefore !== app && frontAfter === frontBefore, `${frontBefore} -> ${frontAfter}`);
+
+// 7. The same, in a NATIVE app. This is what the Chromium-only gate wrongly
+// refused, so it needs live coverage: a regression here goes straight back to
+// "done: true and nothing happens".
+const doc = path.join(path.dirname(file), "native.txt");
+fs.writeFileSync(doc, "AAAAAAAAAAAAAAAAAAAA\nBBBBBBBBBBBBBBBBBBBB\nCCCCCCCCCCCCCCCCCCCC\n");
+execFileSync("/usr/bin/open", ["-a", "TextEdit", doc]);
+await new Promise((r) => setTimeout(r, 2500));
+execFileSync("/usr/bin/osascript", ["-e", 'tell application "Finder" to activate']);
+await new Promise((r) => setTimeout(r, 1200));
+
+const native = async () => (await sky.get_app_state({ app: "TextEdit", disableDiff: true, include_data_url: false }));
+const beforeNative = await native();
+const nativeScale = beforeNative.screenshot?.scale ?? 1;
+// The first text line sits ~40pt below the window top in a default plain-text
+// window; aim at its middle, in the pixels of the image just captured.
+await sky.click({ app: "TextEdit", x: 60 * nativeScale, y: 40 * nativeScale });
+await sky.type_text({ app: "TextEdit", text: "[N]" });
+const nativeLine = lineFor((await native()).text, /AXTextArea/) ?? "";
+check("background click lands in a native app",
+  /A{2,}\[N\]A{2,}/.test(nativeLine),
+  nativeLine.slice(0, 90));
+check("native click did not steal focus either", frontmost() === frontBefore, frontmost());
+
+execFileSync("/usr/bin/osascript", ["-e",
+  'tell application "TextEdit" to close (every document whose name is "native.txt") saving no']);
 
 sky.close();

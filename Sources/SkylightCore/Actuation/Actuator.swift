@@ -354,6 +354,23 @@ public final class Actuator {
         return CGPoint(x: frame.midX, y: frame.midY)
     }
 
+    /// Refuses a background coordinate action aimed at a window we cannot name.
+    ///
+    /// A background mouse event has to carry the target window id, and without
+    /// one `makeMouse` falls back to a plain CGEvent — which is precisely the
+    /// "delivered and then ignored" case this whole path exists to end, except
+    /// it would still report done:true. Reachable through the display_id path,
+    /// where the hit-tested app may have no focused window at all (menu-bar
+    /// apps, bare dialogs).
+    private func requireNamedWindow(_ window: MouseWindow?, background: Bool, action: String) throws {
+        guard background, window == nil else { return }
+        throw SkyServiceError(
+            code: .backgroundUnavailable,
+            message: "\(action): the target window could not be identified (no window id or frame), "
+                + "so a background \(action) cannot name where it is going and would be ignored. "
+                + "Retry with background: false, or act by element_index.")
+    }
+
     /// Refuses a background coordinate action this machine cannot deliver,
     /// instead of posting an event that is swallowed and reporting success —
     /// the silent no-op this whole path exists to end.
@@ -485,6 +502,10 @@ public final class Actuator {
             let err = AXUIElementPerformAction(element, kAXPressAction as CFString)
             guard err == .success else { throw mapAXError(err, action: "click[\(index)]") }
         } else if let x = input.x, let y = input.y {
+            // Before prepareTarget: the refusal is pure and cheap, and running
+            // the focus flip first would deactivate the user's frontmost app
+            // for an action that is about to be refused.
+            try requireBackgroundPointerReaches(background, action: "click")
             let app: NSRunningApplication
             let point: CGPoint
             let windowElement: AXUIElement?
@@ -505,10 +526,10 @@ public final class Actuator {
                 prepareTarget(app: app, window: window, background: background, action: .coordinateClick)
                 point = globalPoint(fromScreenshotX: x, y: y, geometry: geometry!)
             }
-            try requireBackgroundPointerReaches(background, action: "click")
             // Which window the press names. A background click is ignored
             // without it (see BackgroundMouse).
             let window = mouseWindow(windowElement)
+            try requireNamedWindow(window, background: background, action: "click")
             primeUserActivationIfNeeded(app: app, background: background)
             // After the primer (which parks the pointer at (-1,-1)), never
             // before: the primer would otherwise undo the hover.
@@ -738,6 +759,8 @@ public final class Actuator {
         try guardNotPaused()
         let background = effectiveBackground(input.background)
         let (button, down, up, dragged) = try mouseButton(input.mouse_button)
+        // Before prepareTarget, as in click.
+        try requireBackgroundPointerReaches(background, action: "drag")
         let app: NSRunningApplication
         let from: CGPoint
         let to: CGPoint
@@ -761,8 +784,8 @@ public final class Actuator {
             from = globalPoint(fromScreenshotX: input.from_x, y: input.from_y, geometry: geometry!)
             to = globalPoint(fromScreenshotX: input.to_x, y: input.to_y, geometry: geometry!)
         }
-        try requireBackgroundPointerReaches(background, action: "drag")
         let window = mouseWindow(windowElement)
+        try requireNamedWindow(window, background: background, action: "drag")
         post(makeMouse(down, at: from, button: button, window: window, background: background),
              pid: app.processIdentifier, background: background)
         let steps = 12

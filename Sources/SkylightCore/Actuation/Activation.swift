@@ -140,8 +140,14 @@ public func needsUserActivationPrimer(bundleID: String?) -> Bool {
 /// (see `windowLocalPoint`) that mirrored clicks about the window's midline, so
 /// a click aimed at TextEdit's first line landed below its last one and looked
 /// like "AppKit ignores these events".
+public func backgroundPointerReaches(stampAvailable: Bool, canFocusWithoutRaise: Bool) -> Bool {
+    stampAvailable && canFocusWithoutRaise
+}
+
+/// The same decision against this machine's live capabilities.
 public func backgroundPointerReaches() -> Bool {
-    BackgroundMouse.isAvailable && SkyLightBridge.canFocusWithoutRaise
+    backgroundPointerReaches(stampAvailable: BackgroundMouse.isAvailable,
+                             canFocusWithoutRaise: SkyLightBridge.canFocusWithoutRaise)
 }
 
 /// A point guaranteed to be outside every window, so the primer gesture cannot
@@ -153,15 +159,22 @@ public let userActivationPrimerPoint = CGPoint(x: -1, y: -1)
 /// focus). Background mode only performs the focus-without-raise dance for the
 /// former: flipping the user's frontmost app to inactive is a real, if brief,
 /// disturbance and pure AX actions gain nothing from it.
+///
+/// `hover` is in the first list, which it was not until 2026-09-19. A pointer
+/// move only produces `:hover` in Chromium while the target is the ACTIVE app —
+/// measured: hovering a row in a frontmost Chrome reveals its hover-only
+/// button, the identical hover with Finder frontmost does nothing, and it works
+/// again as soon as any action has run the flip. Without this, background
+/// `hover` — the whole point of which is reaching controls a web UI renders
+/// only under the pointer — silently did nothing unless some earlier call
+/// happened to make the app active. (An older note here claimed the flip does
+/// not help; that was measured against a NON-KEY window of the same app, which
+/// is still true and documented on `hover` itself.)
 public func deliversSyntheticEvents(action: ActuatorAction) -> Bool {
     switch action {
-    case .coordinateClick, .pressKey, .typeText, .scroll, .drag:
+    case .coordinateClick, .pressKey, .typeText, .scroll, .drag, .hover:
         return true
-    // `hover` posts a pointer move but stays out of this list: the focus flip
-    // does not make a non-key window accept hover (verified live — the window
-    // does become key and the move is still dropped), so paying with the
-    // user's frontmost app going inactive would buy nothing.
-    case .elementClick, .setValue, .performSecondaryAction, .selectText, .hover:
+    case .elementClick, .setValue, .performSecondaryAction, .selectText:
         return false
     }
 }

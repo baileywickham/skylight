@@ -58,14 +58,18 @@ final class BackgroundMouseTests: XCTestCase {
                                            windowFrame: window, button: .left, clickCount: 1))
     }
 
-    func testBackgroundPointerReachesTracksTheCapabilitiesItNeeds() {
+    func testBackgroundPointerNeedsBothCapabilities() {
         // Capability-driven, not app-driven: what matters is whether this
-        // machine can stamp the event and make the target active without
-        // raising it. An earlier version refused everything outside the
-        // Chromium family, which was an artifact of the mirrored coordinate
-        // bug above — with the math right, a background click lands mid-line in
-        // a backgrounded TextEdit.
-        XCTAssertEqual(backgroundPointerReaches(),
-                       BackgroundMouse.isAvailable && SkyLightBridge.canFocusWithoutRaise)
+        // machine can stamp the event AND make the target active without
+        // raising it. Both are load-bearing — a fully stamped click posted into
+        // a genuinely inactive app is dropped, and lands once the flip has run.
+        // (An earlier version refused everything outside the Chromium family,
+        // which was an artifact of the mirrored coordinate bug above.)
+        XCTAssertTrue(backgroundPointerReaches(stampAvailable: true, canFocusWithoutRaise: true))
+        XCTAssertFalse(backgroundPointerReaches(stampAvailable: true, canFocusWithoutRaise: false),
+                       "a stamped click into an app that is not active does nothing")
+        XCTAssertFalse(backgroundPointerReaches(stampAvailable: false, canFocusWithoutRaise: true),
+                       "without the stamp the event reaches no window")
+        XCTAssertFalse(backgroundPointerReaches(stampAvailable: false, canFocusWithoutRaise: false))
     }
 }

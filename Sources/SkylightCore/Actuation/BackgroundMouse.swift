@@ -57,6 +57,15 @@ public func windowLocalPoint(global: CGPoint, windowFrame: CGRect) -> CGPoint {
 /// Scroll wheels cannot be stamped this way (verified dead in both engines), so
 /// `scroll` is refused in background mode.
 ///
+/// **Drag caveat:** a background `mouseDragged` reports `buttons == 0` to the
+/// page (a foreground one reports 1). Chromium derives that from
+/// `-[NSEvent pressedMouseButtons]`, the real HID button state, which per-pid
+/// posting never sets, and no CGEvent field substitutes for it. Text selection
+/// and AppKit drags are unaffected — verified — but JavaScript that gates on
+/// `e.buttons & 1` during mousemove (sliders, canvas painting, most drag
+/// libraries) reads a background drag as a hover. Use `background: false`
+/// there.
+///
 /// Like every other private entry point here (see `SkyLightBridge`), the symbol
 /// is dlsym-probed: when it is missing, `event(...)` returns nil and the caller
 /// posts the plain CGEvent it would have posted before.

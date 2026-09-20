@@ -255,8 +255,17 @@ real executable path, since it runs via a brew-bin symlink.
   a background click lands mid-line in a backgrounded TextEdit. The gate is now
   about capabilities (`backgroundPointerReaches`: the stamp symbol plus
   focus-without-raise), not about which app is being driven.
-  **Moves stay plain**, unstamped CGEvents: they are not the broken case and
-  `hover` is verified working exactly as it is.
+  **Moves stay plain**, unstamped CGEvents — they are not the broken case — but
+  a move only produces `:hover` in Chromium while the target app is ACTIVE, so
+  `hover` now takes the focus-without-raise flip like every other
+  event-delivering action (`deliversSyntheticEvents`). Before that it silently
+  did nothing whenever the browser was not frontmost, which is most of the time
+  for a background agent.
+  **Drag caveat:** a background `mouseDragged` reports `buttons == 0` to the
+  page (Chromium reads the real HID button state, which per-pid posting never
+  sets). Text selection and AppKit drags are fine; JavaScript that gates on
+  `e.buttons & 1` sees a background drag as a hover, so use `background: false`
+  for sliders and canvas painting.
   **Scroll has no fix**: a wheel event cannot be stamped this way (verified dead
   in both engines), so background `scroll` is refused — use `background: false`.
   Dead ends, don't repeat them: event-shaping variants on an unstamped CGEvent

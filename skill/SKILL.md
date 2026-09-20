@@ -43,12 +43,12 @@ All methods take `app` (app name, e.g. `"Finder"`). Full types: `$(skylight-run 
 | `list_windows` | — (windows with `window_id`, `title`, `is_focused`) |
 | `get_app_state` | `disableDiff?`, `window_id?` (from `list_windows`), `include_data_url?`, `max_depth?`/`max_nodes?` (tree caps, default 60/5000 — raise when a line says "truncated … raise with max_depth"), `root_element_index?` (capture just that element's subtree — one pane of a big Electron window, so an unrelated webview stays out of the tree and the diff) |
 | `click` | `element_index` OR `x`,`y` (screenshot px); `display_id?` makes x/y pixels of the latest `screenshot` (then `app` is optional — hit-tested); `mouse_button?`, `click_count?`, `hover?` (default true: move the pointer there first). Background coordinate clicks work (native and web alike) as long as `skylight doctor` shows `bg mouse events: available` and `focus w/o raise: available`; without those they fail `background_unavailable`, so click by `element_index` (no focus needed) or pass `background: false` |
-| `hover` | `element_index` OR `x`,`y` (same targeting as `click`); `settle_ms?` — park the pointer WITHOUT clicking, so hover-only UI renders |
+| `hover` | `element_index` OR `x`,`y` (same targeting as `click`); `settle_ms?` — park the pointer WITHOUT clicking, so hover-only UI renders. Works with the app in the background (it is made active without being raised); a hover into a NON-KEY window of that app is still dropped |
 | `press_key` | `keys`: X-keysym chord, e.g. `"Cmd+s"`, `"Ctrl+Shift+t"`, `"Return"`; `repeat?` (send it N times in one call, max 200); `app` optional (frontmost) |
 | `type_text` | `text`; `element_index?` (focus that field first — without it the text goes wherever focus happens to be); `app` optional (frontmost) |
 | `scroll` | `element_index`, `direction` (up/down/left/right), `pages` — needs `background: false`; a scroll wheel cannot be delivered to a background app |
 | `set_value` | `element_index`, `value` — read-back verified: a controlled web input that discards the write errors instead of reporting success |
-| `drag` | `from_x`,`from_y`,`to_x`,`to_y` (screenshot px); `display_id?` as for click |
+| `drag` | `from_x`,`from_y`,`to_x`,`to_y` (screenshot px); `display_id?` as for click. A background drag reports `buttons: 0` to web pages, so JS drag libraries read it as a hover — use `background: false` for sliders/canvas |
 | `perform_secondary_action` | `element_index`, `action` (e.g. `"AXShowMenu"`) |
 | `select_text` | `element_index`, `text`, `prefix?`, `suffix?`, `selection_type` |
 | `capabilities` | — (TCC grants, private-symbol availability, `parallel_actuation`, `space_management`) |

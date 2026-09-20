@@ -77,4 +77,29 @@ if (revealed != null) {
   console.log("AFTER-CLICK", clicked);
   console.log(/BUTTON CLICKED/.test(clicked) ? "CLICKED-REVEALED PASS" : "CLICKED-REVEALED FAIL");
 }
+
+// The case that matters and that this check used to miss: the browser is NOT
+// the frontmost app. A pointer move only produces :hover in Chromium while the
+// target is ACTIVE, so without the focus-without-raise flip this silently does
+// nothing — which is how `hover` shipped in v0.3.5, working only when the user
+// happened to be looking at the browser.
+execFileSync("/usr/bin/osascript", ["-e", 'tell application "Finder" to activate']);
+await new Promise((r) => setTimeout(r, 1200));
+await sky.hover({ app, x: 5, y: 5 });          // park the pointer off the row
+await new Promise((r) => setTimeout(r, 400));
+const backgroundBaseline = await tree();
+if (indexOf(backgroundBaseline, /Edit cloud environment/) != null) {
+  throw new Error("the control is still present; the pointer did not leave the row");
+}
+const rowAgain = indexOf(backgroundBaseline, /value="Default"/)!;
+await sky.hover({ app, element_index: rowAgain, settle_ms: 700 });
+const backgrounded = await tree();
+const front = execFileSync("/usr/bin/osascript",
+  ["-e", 'tell application "System Events" to return name of first application process whose frontmost is true'])
+  .toString().trim();
+console.log("BACKGROUND-HOVER", status(backgrounded), `(frontmost: ${front})`);
+console.log(indexOf(backgrounded, /Edit cloud environment/) != null && front !== app
+  ? "BACKGROUND-HOVER PASS"
+  : "BACKGROUND-HOVER FAIL");
+
 sky.close();
