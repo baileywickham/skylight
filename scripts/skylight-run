@@ -40,25 +40,27 @@ AGENT_LABEL="com.skylight.SkylightService"
 if [ -f "$BASE/../Info.plist" ]; then
   INSTALLED=1
   CONTENTS="$(cd "$BASE/.." && pwd)"
-  VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$CONTENTS/Info.plist" 2>/dev/null || echo unknown)"
-  TS_SRC="$BASE/ts"
-  TS_DIR="$HOME/Library/Application Support/skylight/ts-$VERSION"
+  VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$CONTENTS/Info.plist" 2>/dev/null)" \
+    || { echo "skylight-run: cannot read the version from $CONTENTS/Info.plist — the app bundle is damaged; reinstall with 'brew reinstall --cask skylight'" >&2; exit 1; }
+  # The client ships COMPILED in the bundle: plain .js the stock node runs, and
+  # mcp.mjs with its dependencies already bundled in. Nothing is installed,
+  # staged or written at runtime, so first use is the same as every later use.
+  TS_DIR="$BASE/ts"
   DAEMON="" # launchd-managed; see ensure_daemon
   CLI="$CONTENTS/MacOS/skylight"
 else
   INSTALLED=0
-  TS_DIR="$BASE/ts"
+  TS_DIR="$BASE/ts/dist"
   DAEMON="$BASE/.build/debug/SkylightService"
   CLI="$BASE/.build/debug/skylight"
 fi
-TSX="$TS_DIR/node_modules/.bin/tsx"
 
 die() { echo "skylight-run: $*" >&2; exit 1; }
 
 socket_live() {
   # A leftover socket file from a killed daemon still exists but refuses
   # connections — probe it for real instead of trusting `ls`.
-  [ -S "$SOCK" ] && "$TSX" -e '
+  [ -S "$SOCK" ] && node -e '
     const net = require("node:net");
     const s = net.connect(process.argv[1]);
     s.on("connect", () => { s.end(); process.exit(0); });
@@ -67,28 +69,41 @@ socket_live() {
   ' "$SOCK" 2>/dev/null
 }
 
-ensure_deps() {
-  if [ "$INSTALLED" = 1 ] && [ ! -d "$TS_DIR" ]; then
-    # First run of this version: stage the client outside the bundle, then
-    # install its deps with the user's node (not a brew dependency, so an
-    # nvm-managed node keeps working).
-    mkdir -p "$(dirname "$TS_DIR")"
-    cp -R "$TS_SRC" "$TS_DIR.tmp.$$" && mv "$TS_DIR.tmp.$$" "$TS_DIR"
+# Node is the only runtime requirement, and it must be new enough to strip
+# types from a .mts driver (22.18+). There is deliberately no fallback here: a
+# package-manager cascade that silently installs a tree at first use is how
+# "works on my machine" gets shipped, and it made the first run differ from
+# every later one.
+NODE_MIN="22.18.0"
+require_node() {
+  command -v node >/dev/null 2>&1 \
+    || die "node is required and not on PATH (need >= $NODE_MIN, which runs .mts drivers natively): install it with 'brew install node'"
+  local have
+  have="$(node --version 2>/dev/null | sed 's/^v//')"
+  [ -n "$have" ] || die "'node --version' failed; check your node install"
+  if [ "$(printf '%s\n%s\n' "$NODE_MIN" "$have" | sort -V | head -1)" != "$NODE_MIN" ]; then
+    die "node $have is too old — need >= $NODE_MIN (it runs .mts drivers without a transpiler); upgrade with 'brew upgrade node'"
   fi
-  if [ ! -x "$TSX" ]; then
-    # pnpm, however this machine has it: on PATH, via corepack (ships with
-    # node), or downloaded for this one run. The version is pinned by
-    # package.json's packageManager field, so all three install the same tree.
-    if command -v pnpm >/dev/null 2>&1; then PM=(pnpm)
-    elif command -v corepack >/dev/null 2>&1; then PM=(corepack pnpm)
-    else PM=(npx --yes pnpm@10.25.0)
-    fi
-    (cd "$TS_DIR" && "${PM[@]}" install --silent) || die "${PM[*]} install failed in $TS_DIR"
+  [ -f "$TS_DIR/mcp.mjs" ] \
+    || die "the bundled client is missing at $TS_DIR — reinstall with 'brew reinstall --cask skylight'"
+}
+
+build_dev_client() {
+  # Dev tree only: the installed bundle already carries compiled output.
+  [ "$INSTALLED" = 0 ] || return 0
+  if [ ! -f "$TS_DIR/mcp.mjs" ] || [ -n "$(find "$BASE/ts/src" -newer "$TS_DIR/mcp.mjs" -name '*.ts' -print -quit 2>/dev/null)" ]; then
+    echo "skylight-run: building the TS client..." >&2
+    (cd "$BASE/ts" && pnpm run build:dist >/dev/null) || die "pnpm run build:dist failed in $BASE/ts"
   fi
-  if [ "$INSTALLED" = 0 ] && [ ! -x "$DAEMON" ]; then
+  if [ ! -x "$DAEMON" ]; then
     echo "skylight-run: building daemon..." >&2
     (cd "$BASE" && swift build) || die "swift build failed"
   fi
+}
+
+ensure_deps() {
+  build_dev_client
+  require_node
 }
 
 ensure_daemon() {
@@ -139,7 +154,7 @@ case "${1:-}" in
     ensure_daemon
     # mcp.ts runs `$SKYLIGHT_CLI start` itself if the daemon goes away later
     # (e.g. a brew upgrade under a long-lived server).
-    SKYLIGHT_CLI="$CLI" exec "$TSX" "$TS_DIR/src/mcp.ts"
+    SKYLIGHT_CLI="$CLI" exec node "$TS_DIR/mcp.mjs"
     ;;
   -e)
     [ -n "${2:-}" ] || die "usage: skylight-run -e '<code>'"
@@ -147,7 +162,7 @@ case "${1:-}" in
     TMPDIR_DRIVER="$(mktemp -d)"
     TMP="$TMPDIR_DRIVER/driver.mts"   # .mts forces ESM => top-level await works
     {
-      echo "import { sky } from '$TS_DIR/src/index.js';"
+      echo "import { sky } from '$TS_DIR/index.js';"
       echo "try {"
       cat <<<"$2"
       echo "} finally { sky.close(); }"
@@ -158,7 +173,7 @@ case "${1:-}" in
     # (set +e/-e around the call: under `set -e` a bare failing command would
     # abort the script before the cleanup line ever ran.)
     set +e
-    "$TSX" "$TMP"
+    node "$TMP"
     status=$?
     set -e
     rm -rf "$TMPDIR_DRIVER"
@@ -171,6 +186,6 @@ case "${1:-}" in
   *)
     [ -f "$1" ] || die "no such driver file: $1"
     ensure_daemon
-    exec "$TSX" "$@"
+    exec node "$@"
     ;;
 esac

@@ -21,8 +21,9 @@ await sky.click({ app: "TextEdit", element_index: 3 });
 await sky.type_text({ app: "TextEdit", text: "hello" });'
 ```
 
-For longer drivers write a **`.mts` file** (never plain `.ts` outside the repo — CJS breaks top-level await; never `tsx -e`) importing:
-`import { sky } from '<dir>/src/index.js'` where `<dir>` is `$(skylight-run --ts-dir)`
+For longer drivers write a **`.mts` file** (`.mts` forces ESM, so top-level await works) importing:
+`import { sky } from '<dir>/index.js'` where `<dir>` is `$(skylight-run --ts-dir)`. It runs on plain
+`node` — the client ships compiled inside the app and node strips the types, so there is nothing to install
 then `skylight-run driver.mts`. End with `sky.close()`.
 
 Other commands: `skylight-run --status` (permissions/socket report), `skylight-run --stop`.

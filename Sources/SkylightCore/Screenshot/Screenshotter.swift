@@ -322,10 +322,13 @@ public final class Screenshotter {
                 throw SkyServiceError(code: .captureFailed, message: state)
             }
             scWindow = match
-        } else if let match = fallbackSCWindow(for: window, in: content) {
-            // Private-symbol bridge unavailable: best-effort frame+title match.
-            scWindow = match
         } else {
+            // No window id: `_AXUIElementGetWindow` did not resolve. There used
+            // to be a frame+title match here, which picks an arbitrary window
+            // whenever two of them look alike (two empty Untitled documents,
+            // two same-size panels) — a screenshot of the wrong window is worse
+            // than no screenshot, because nothing downstream can tell.
+            // `skylight doctor` reports the bridge.
             var pid: pid_t = 0
             AXUIElementGetPid(window, &pid)
             let role: String = axAttribute(window, kAXRoleAttribute) ?? "?"
@@ -351,33 +354,4 @@ public final class Screenshotter {
         return (image, actualScale)
     }
 
-    /// Best-effort fallback when _AXUIElementGetWindow is unavailable: match the
-    /// AX window's frame (top-left-origin global points, same space as
-    /// SCWindow.frame) and title against shareable windows of the same pid.
-    private func fallbackSCWindow(for window: AXUIElement, in content: SCShareableContent) -> SCWindow? {
-        var pid: pid_t = 0
-        guard AXUIElementGetPid(window, &pid) == .success else { return nil }
-        var positionRef: CFTypeRef?
-        var sizeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &positionRef) == .success,
-              AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeRef) == .success else {
-            return nil
-        }
-        var origin = CGPoint.zero
-        var size = CGSize.zero
-        AXValueGetValue(positionRef as! AXValue, .cgPoint, &origin)
-        AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
-        let frame = CGRect(origin: origin, size: size)
-        let title: String? = axAttribute(window, kAXTitleAttribute)
-
-        let sameApp = content.windows.filter { $0.owningApplication?.processID == pid }
-        let frameMatches = sameApp.filter {
-            abs($0.frame.origin.x - frame.origin.x) <= 2 && abs($0.frame.origin.y - frame.origin.y) <= 2 &&
-            abs($0.frame.width - frame.width) <= 2 && abs($0.frame.height - frame.height) <= 2
-        }
-        if frameMatches.count == 1 { return frameMatches.first }
-        if let title, let both = frameMatches.first(where: { $0.title == title }) { return both }
-        if let title, let byTitle = sameApp.first(where: { $0.title == title }) { return byTitle }
-        return frameMatches.first
-    }
 }

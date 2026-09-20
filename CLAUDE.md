@@ -10,7 +10,7 @@ or raw coordinates.
 
 ```
 Claude / any client
-  │  writes TS, runs `pnpm exec tsx script.ts`
+  │  writes TS, runs `node script.mts`
   ▼
 @skylight/sky  (TypeScript client, ts/)  ── one JSON object per line ──▶
   ▼  Unix socket: ~/Library/Application Support/skylight/ipc/computeruse.sock
@@ -77,7 +77,7 @@ after a macOS upgrade; see `ts/live/README.md`.
 ```bash
 swift build && .build/debug/SkylightService &   # this machine's local binary has TCC grants
 # then from ts/, write a .ts driver and run it:
-pnpm exec tsx driver.ts
+node driver.mts        # or: skylight-run driver.mts
 ```
 
 `ts/test/smoke.test.ts` is the canonical example of spawning the daemon and
@@ -102,9 +102,13 @@ wrapper (`Contents/Resources/bin/skylight-run`), the TS client source
 `BundleProgram`-relative). The cask's postflight runs `skylight register`, which
 registers that agent with `SMAppService` and starts the daemon — no separate
 signing or install step, and `brew upgrade` just works. `skylight-run` stages
-the TS client + `node_modules` under `~/Library/Application Support/skylight/ts-<version>`
-on first run (pnpm from PATH, else corepack, else a one-shot `npx pnpm`) so the
-signed bundle is never written to.
+nothing: the client ships **compiled** in the bundle (`Contents/Resources/ts/`
+— plain `.js` the stock node imports, plus `mcp.mjs` with its dependencies
+already bundled in). There is no install, staging or package manager at
+runtime, so a fresh install behaves exactly like an old one and there is no
+first-run path to get wrong. The only requirement is **node >= 22.18**, which
+runs a `.mts` driver by stripping its types; `skylight-run` says so and exits
+if node is missing or older, rather than reaching for a fallback.
 
 Releases: `./release.sh patch` tags `vX.Y.Z`; `.github/workflows/release.yml`
 runs `scripts/build.sh` (sign + notarize + DMG/ZIP), publishes the GitHub
@@ -125,15 +129,16 @@ real executable path, since it runs via a brew-bin symlink.
 
 ## Conventions & gotchas (learned the hard way — don't regress these)
 
-- **`pnpm exec tsx -e '...'` one-liners FAIL** here (esbuild CJS top-level-await).
-  Write a `.ts`/`.mjs` file and run it, or add a vitest spec.
+- **Drivers run on plain `node`** (>= 22.18, which strips types from `.mts`).
+  `ts/` still uses pnpm + vitest for development and the build, but nothing at
+  runtime does: `skylight-run` runs `node` against the compiled client.
 - **`ts/` is a pnpm package** (`packageManager: pnpm@10.25.0`, lockfile
   `pnpm-lock.yaml`). `ts/.npmrc` pins `node-linker=hoisted`: `skylight-run`
-  stages the client into `~/Library/Application Support/skylight/ts-<version>`
-  and installs there, so a node_modules of symlinks into the global store would
-  break the moment the store is pruned. pnpm blocks dependency build scripts by
-  default and the suite runs fine without them (esbuild ships its binary as a
-  platform optional dep) — don't `pnpm approve-builds` without a reason.
+  keeps the dev install self-contained. `scripts/build.sh` runs
+  `pnpm run build:dist` (esbuild) and ships the OUTPUT, so the bundle carries no
+  node_modules and nothing is installed on the user's machine. pnpm blocks
+  dependency build scripts by default and the suite runs fine without them —
+  don't `pnpm approve-builds` without a reason.
 - **Never use `is`/`as?` to filter pure CoreFoundation types** (e.g. `AXUIElement`,
   `AXValue`). At runtime `$0 is AXUIElement` returns true for *any* CF type, so
   `unsafeDowncast` after it is UB. Filter with

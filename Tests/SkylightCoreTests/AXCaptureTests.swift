@@ -185,9 +185,12 @@ final class AXCaptureTests: XCTestCase {
         XCTAssertTrue(canDiff(disableDiff: false, hasPrevious: true, previousWindowID: 7, currentWindowID: 7))
         // Different window: a diff against another window's tree is bogus — full tree.
         XCTAssertFalse(canDiff(disableDiff: false, hasPrevious: true, previousWindowID: 7, currentWindowID: 8))
-        // Ids unavailable (bridge missing) on either side: preserve the old
-        // per-app diff behavior rather than degrading to full-tree-always.
-        XCTAssertTrue(canDiff(disableDiff: false, hasPrevious: true, previousWindowID: nil, currentWindowID: 7))
-        XCTAssertTrue(canDiff(disableDiff: false, hasPrevious: true, previousWindowID: 7, currentWindowID: nil))
+        // Ids unavailable (bridge missing) on either side: a full tree. A diff
+        // we cannot prove came from the same window reports the other window's
+        // nodes as removed and this one's as added, and the caller cannot tell
+        // that from real changes. Bigger output beats wrong output.
+        XCTAssertFalse(canDiff(disableDiff: false, hasPrevious: true, previousWindowID: nil, currentWindowID: 7))
+        XCTAssertFalse(canDiff(disableDiff: false, hasPrevious: true, previousWindowID: 7, currentWindowID: nil))
+        XCTAssertFalse(canDiff(disableDiff: false, hasPrevious: true, previousWindowID: nil, currentWindowID: nil))
     }
 }

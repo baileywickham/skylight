@@ -95,9 +95,11 @@ public func shouldReapplyEnablement(previouslyHadWebArea: Bool, currentHasWebAre
 /// Window- and scope-aware diff gate: diff only against a baseline captured
 /// from the SAME window and the SAME subtree.
 ///
-/// When either window id is unknown (private bridge unavailable) fall back to
-/// the original per-app behavior — better an occasional cross-window diff on
-/// bridge-less machines than never diffing at all there. Scope is always known
+/// When either window id is unknown (private bridge unavailable) the honest
+/// answer is a FULL tree, not a diff: a diff against a baseline that may have
+/// come from another window reports that window's nodes as removed and this
+/// one's as added, and nothing downstream can tell that apart from real
+/// changes. Costlier output beats wrong output. Scope is always known
 /// (it is the request's own `root_element_index`), and a mismatch must force a
 /// full tree: diffing a pane against a whole-window baseline would report every
 /// node outside the pane as removed.
@@ -106,7 +108,7 @@ public func canDiff(disableDiff: Bool, hasPrevious: Bool,
                     previousScope: Int? = nil, currentScope: Int? = nil) -> Bool {
     guard !disableDiff, hasPrevious else { return false }
     guard previousScope == currentScope else { return false }
-    guard let prev = previousWindowID, let cur = currentWindowID else { return true }
+    guard let prev = previousWindowID, let cur = currentWindowID else { return false }
     return prev == cur
 }
 

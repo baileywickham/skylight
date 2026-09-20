@@ -8,7 +8,8 @@
   "types": "sky.d.ts",
   "scripts": {
     "test": "vitest run",
-    "build:dts": "tsc -p tsconfig.json && cat dist/types.d.ts dist/client.d.ts dist/index.d.ts > sky.d.ts"
+    "build:dts": "tsc -p tsconfig.json && cat dist/types.d.ts dist/client.d.ts dist/index.d.ts > sky.d.ts",
+    "build:dist": "esbuild src/client.ts src/types.ts src/index.ts --outdir=dist --platform=node --format=esm --log-level=warning && esbuild src/mcp.ts --bundle --platform=node --format=esm --outfile=dist/mcp.mjs --log-level=warning && node -e \"require('fs').writeFileSync('dist/package.json', JSON.stringify({type:'module'}))\""
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

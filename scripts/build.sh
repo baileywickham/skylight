@@ -62,12 +62,16 @@ GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 git diff-index --quiet HEAD -- ":!${VERSION_FILE}" 2>/dev/null || GIT_COMMIT="${GIT_COMMIT}-dirty"
 /usr/libexec/PlistBuddy -c "Add :SkylightGitCommit string ${GIT_COMMIT}" "${APP_BUNDLE}/Contents/Info.plist"
 
-# TS client: source + lockfile only (plus .npmrc, which pins the hoisted
-# node_modules layout the staged install depends on). node_modules is installed
-# per-user on first run (scripts/skylight-run) so nothing is ever written inside
-# the signed bundle.
-cp -R ts/src ts/sky.d.ts ts/package.json ts/pnpm-lock.yaml ts/.npmrc ts/tsconfig.json \
-      "${APP_BUNDLE}/Contents/Resources/ts/"
+# TS client: COMPILED, so the installed app needs nothing but node. dist/ holds
+# plain .js the stock node imports, mcp.mjs with its dependencies bundled in,
+# and a package.json that marks the directory ESM. Nothing is installed, staged
+# or written at runtime, so a fresh install behaves exactly like an old one —
+# there is no first-run path to get wrong.
+echo "==> Building the TS client"
+(cd ts && pnpm install --frozen-lockfile --silent && pnpm run build:dist && pnpm run build:dts >/dev/null)
+[ -f ts/dist/mcp.mjs ] || { echo "ts/dist/mcp.mjs was not produced"; exit 1; }
+cp -R ts/dist/. "${APP_BUNDLE}/Contents/Resources/ts/"
+cp ts/sky.d.ts   "${APP_BUNDLE}/Contents/Resources/ts/"
 
 # Sign inside-out: the CLI, then the bundle (which seals the daemon + resources).
 if [ -n "${SIGN_IDENTITY}" ]; then

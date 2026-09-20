@@ -168,10 +168,14 @@ public final class Actuator {
     }
 
     /// The app for an action that named none: the app owning the UI under
-    /// `point` (AX hit test), else the frontmost app. Approval-gated like an
-    /// explicit target. Hit-testing matters because the frontmost app is not
-    /// always what is under the pointer — a system dialog or another app's
-    /// floating panel can sit over it.
+    /// `point` (AX hit test). Approval-gated like an explicit target.
+    ///
+    /// When a point is given and the hit test cannot name an app, this is an
+    /// error rather than "use the frontmost app". Those are different apps
+    /// whenever it matters — a dialog or another app's floating panel over the
+    /// one in front is exactly when the hit test fails — and clicking a
+    /// coordinate in the wrong app is worse than refusing. Without a point
+    /// (keyboard actions) the frontmost app IS the documented target.
     private func resolveImplicit(point: CGPoint?) throws -> NSRunningApplication {
         if let point {
             var element: AXUIElement?
@@ -183,6 +187,11 @@ public final class Actuator {
                     return app
                 }
             }
+            throw SkyServiceError(
+                code: .appNotFound,
+                message: "no app could be identified at (\(Int(point.x)), \(Int(point.y))) — pass `app` "
+                    + "explicitly. (Falling back to the frontmost app here would act on a different "
+                    + "app than the one under the point.)")
         }
         guard let front = NSWorkspace.shared.frontmostApplication else {
             throw SkyServiceError(code: .appNotFound, message: "no frontmost app to target; pass app explicitly")
@@ -249,8 +258,17 @@ public final class Actuator {
             }
             geometry = g
         }
-        if needsGeometry, let windowID = capture.latestWindowID(forPid: app.processIdentifier),
-           let listing = try? capture.windowListings(of: app).first(where: { $0.info.window_id == windowID }) {
+        if needsGeometry, let windowID = capture.latestWindowID(forPid: app.processIdentifier) {
+            // The coordinates describe THAT window. If it is gone, they mean
+            // nothing: falling through to whatever is focused now would land
+            // the click at the same pixels in a different window.
+            guard let listing = try? capture.windowListings(of: app).first(where: { $0.info.window_id == windowID })
+            else {
+                throw SkyServiceError(
+                    code: .staleElementIndex,
+                    message: "the window those coordinates came from (window_id \(windowID)) is gone — "
+                        + "call get_app_state again and use pixels of the new capture")
+            }
             return (app, listing.element, geometry)
         }
         let window = try capture.focusedWindow(of: app)
@@ -263,11 +281,20 @@ public final class Actuator {
     /// window is dropped, and after the focus flip the wrong window would
     /// become key.
     private func capturedWindow(of app: NSRunningApplication) throws -> AXUIElement {
-        if let windowID = capture.latestWindowID(forPid: app.processIdentifier),
-           let listing = try? capture.windowListings(of: app).first(where: { $0.info.window_id == windowID }) {
-            return listing.element
+        guard let windowID = capture.latestWindowID(forPid: app.processIdentifier) else {
+            // No capture has named a window for this app yet (or the private
+            // window-id bridge is unavailable): the focused window is the only
+            // thing it could mean.
+            return try capture.focusedWindow(of: app)
         }
-        return try capture.focusedWindow(of: app)
+        guard let listing = try? capture.windowListings(of: app).first(where: { $0.info.window_id == windowID })
+        else {
+            throw SkyServiceError(
+                code: .staleElementIndex,
+                message: "the window the last capture used (window_id \(windowID)) is gone — "
+                    + "call get_app_state again")
+        }
+        return listing.element
     }
 
     /// Readies the target for an action.
