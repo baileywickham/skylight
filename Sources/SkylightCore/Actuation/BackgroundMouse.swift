@@ -37,8 +37,8 @@ public func windowLocalPoint(global: CGPoint, windowFrame: CGRect) -> CGPoint {
 ///      why it is no longer built that way, keeping AppKit off the parallel
 ///      actuation queues.
 ///   2. **`CGEventSetWindowLocation`** with the window-local point. Without it
-///      the event arrives at the right window with a location of (-1,-1) and
-///      hits nothing.
+///      the event arrives at the right window with an unusable location — an
+///      instrumented AppKit target logged `loc=(-1, y)` — and hits nothing.
 ///
 /// Fields 91/92 (`kCGMouseEventWindowUnderMousePointer` and its handler twin)
 /// are NOT required: removed on both engines, the click still lands.
@@ -50,9 +50,12 @@ public func windowLocalPoint(global: CGPoint, windowFrame: CGRect) -> CGPoint {
 /// used: the app would see a Cmd-click, which means "open in a new tab" to a
 /// browser and "extend the selection" to half of AppKit.
 ///
-/// Mouse MOVES stay plain, unstamped CGEvents. They are not the broken case,
-/// and `hover` — the thing that reaches a control a web UI only renders under
-/// the pointer — is verified working exactly as it is.
+/// Mouse MOVES stay plain, unstamped CGEvents: the stamp is not what they were
+/// missing, and stamping them breaks `hover` outright (an NSEvent-built move
+/// stops registering as a hover in Chromium). What a move DOES need is the
+/// target app believing it is active — a per-pid move produces `:hover` only
+/// then — which is why `hover` takes the focus-without-raise flip; see
+/// `deliversSyntheticEvents`.
 ///
 /// Scroll wheels cannot be stamped this way (verified dead in both engines), so
 /// `scroll` is refused in background mode.
