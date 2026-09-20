@@ -85,4 +85,30 @@ final class FocusWithoutRaiseTests: XCTestCase {
     func testHoverPaysForTheFocusFlip() {
         XCTAssertTrue(deliversSyntheticEvents(action: .hover))
     }
+
+    // MARK: - Putting the user's app back (2026-09-20)
+
+    /// The flip tells the user's frontmost app it went inactive. Nothing used
+    /// to tell it otherwise, so it sat there dimmed — title bar greyed, caret
+    /// stopped — until the user clicked it, even though macOS still considered
+    /// it frontmost and their typing still reached it.
+    func testRestoreUndoesTheFlipInTheRightOrder() {
+        let steps = focusRestoreSequence(targetWindowID: 4242)
+        XCTAssertEqual(steps.count, 2)
+        // The target is told it is inactive FIRST: two apps both believing they
+        // are active is the state that leaves a stray focus ring behind.
+        XCTAssertEqual(steps[0].destination, .targetProcess)
+        XCTAssertEqual(steps[0].record, EventRecord.activation(windowID: 4242, activate: false))
+        XCTAssertEqual(steps[1].destination, .frontProcess)
+        XCTAssertEqual(steps[1].record, EventRecord.activation(windowID: 0, activate: true))
+    }
+
+    func testRestoreIsTheMirrorOfTheFlip() {
+        // Same two processes, opposite activation bits.
+        let flip = focusWithoutRaiseSequence(targetWindowID: 99, frontWindowID: 0, frontIsTarget: false)
+        let restore = focusRestoreSequence(targetWindowID: 99)
+        XCTAssertEqual(flip.first?.destination, .frontProcess, "the flip deactivates the front app first")
+        XCTAssertEqual(restore.first?.destination, .targetProcess, "the restore deactivates the target first")
+        XCTAssertEqual(restore.last?.destination, .frontProcess)
+    }
 }

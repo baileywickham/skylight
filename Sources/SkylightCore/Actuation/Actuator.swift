@@ -280,13 +280,17 @@ public final class Actuator {
     /// `focusWithoutRaise`; pure AX-element actions skip it, since they work
     /// regardless of focus and flipping the user's frontmost app to inactive is
     /// a real (if brief) disturbance not worth paying for nothing.
+    /// Returns the flip to undo once the action's events have been delivered,
+    /// or nil when nothing was flipped (foreground mode, an AX-only action, or
+    /// the target was already frontmost). Callers `defer` the restore.
+    @discardableResult
     private func prepareTarget(app: NSRunningApplication, window: AXUIElement?,
-                               background: Bool, action: ActuatorAction) {
+                               background: Bool, action: ActuatorAction) -> FocusFlip? {
         guard shouldActivate(background: background) else {
             if deliversSyntheticEvents(action: action), let window {
-                focusWithoutRaise(app: app, window: window)
+                return focusWithoutRaise(app: app, window: window)
             }
-            return
+            return nil
         }
         guard let window else {
             // No window to raise (menu-bar app, or a process whose dialog the
@@ -296,9 +300,20 @@ public final class Actuator {
             let deadline = Date().addingTimeInterval(2.0)
             while !app.isActive && Date() < deadline { usleep(20_000) }
             usleep(80_000)
-            return
+            return nil
         }
         activateAndRaise(app: app, window: window)
+        return nil
+    }
+
+    /// Puts the user's frontmost app back the way it was.
+    ///
+    /// Deferred by every action that flips focus, so it runs after the events
+    /// are posted AND after `postActionSleep` — the target needs to still
+    /// believe it is active while it processes them.
+    private func restore(_ flip: FocusFlip?) {
+        guard let flip else { return }
+        restoreFocus(flip)
     }
 
     /// Chromium drops synthetic clicks into a backgrounded window unless they
@@ -489,6 +504,10 @@ public final class Actuator {
 
     public func click(_ input: ClickInput) throws -> ActionResult {
         try guardNotPaused()
+        // Function scope, so the restore runs after the events are posted —
+        // not at the end of whichever branch resolved the target.
+        var flip: FocusFlip?
+        defer { restore(flip) }
         let background = effectiveBackground(input.background)
         _ = try mouseButton(input.mouse_button) // validate early
         if let index = input.element_index {
@@ -498,7 +517,7 @@ public final class Actuator {
             let app = try resolveApproved(appIdentifier)
             let element = try capture.element(forIndex: index, appPid: app.processIdentifier)
             let window = try capture.focusedWindow(of: app)
-            prepareTarget(app: app, window: window, background: background, action: .elementClick)
+            flip = prepareTarget(app: app, window: window, background: background, action: .elementClick)
             let err = AXUIElementPerformAction(element, kAXPressAction as CFString)
             guard err == .success else { throw mapAXError(err, action: "click[\(index)]") }
         } else if let x = input.x, let y = input.y {
@@ -514,7 +533,7 @@ public final class Actuator {
                 let resolved = try displayTarget(input.app, at: point)
                 app = resolved.app
                 windowElement = resolved.window
-                prepareTarget(app: app, window: resolved.window, background: background, action: .coordinateClick)
+                flip = prepareTarget(app: app, window: resolved.window, background: background, action: .coordinateClick)
             } else {
                 guard let appIdentifier = input.app else {
                     throw SkyServiceError(code: .invalidParams,
@@ -523,7 +542,7 @@ public final class Actuator {
                 let (resolvedApp, window, geometry) = try target(appIdentifier, needsGeometry: true)
                 app = resolvedApp
                 windowElement = window
-                prepareTarget(app: app, window: window, background: background, action: .coordinateClick)
+                flip = prepareTarget(app: app, window: window, background: background, action: .coordinateClick)
                 point = globalPoint(fromScreenshotX: x, y: y, geometry: geometry!)
             }
             // Which window the press names. A background click is ignored
@@ -562,6 +581,10 @@ public final class Actuator {
     /// hover-only UI renders before the next capture. Clicks nothing.
     public func hover(_ input: HoverInput) throws -> ActionResult {
         try guardNotPaused()
+        // Function scope, so the restore runs after the events are posted —
+        // not at the end of whichever branch resolved the target.
+        var flip: FocusFlip?
+        defer { restore(flip) }
         let background = effectiveBackground(input.background)
         let app: NSRunningApplication
         let point: CGPoint
@@ -573,13 +596,13 @@ public final class Actuator {
             let element = try capture.element(forIndex: index, appPid: app.processIdentifier)
             let window = try capturedWindow(of: app)
             point = try pointerPoint(element: element, window: window, action: "hover[\(index)]")
-            prepareTarget(app: app, window: window, background: background, action: .hover)
+            flip = prepareTarget(app: app, window: window, background: background, action: .hover)
         } else if let x = input.x, let y = input.y {
             if let displayID = input.display_id {
                 point = try displayPoint(x: x, y: y, displayID: displayID)
                 let resolved = try displayTarget(input.app, at: point)
                 app = resolved.app
-                    prepareTarget(app: app, window: resolved.window, background: background, action: .hover)
+                    flip = prepareTarget(app: app, window: resolved.window, background: background, action: .hover)
             } else {
                 guard let appIdentifier = input.app else {
                     throw SkyServiceError(code: .invalidParams,
@@ -587,7 +610,7 @@ public final class Actuator {
                 }
                 let (resolvedApp, window, geometry) = try target(appIdentifier, needsGeometry: true)
                 app = resolvedApp
-                    prepareTarget(app: app, window: window, background: background, action: .hover)
+                    flip = prepareTarget(app: app, window: window, background: background, action: .hover)
                 point = globalPoint(fromScreenshotX: x, y: y, geometry: geometry!)
             }
         } else {
@@ -602,10 +625,14 @@ public final class Actuator {
 
     public func pressKey(_ input: PressKeyInput) throws -> ActionResult {
         try guardNotPaused()
+        // Function scope, so the restore runs after the events are posted —
+        // not at the end of whichever branch resolved the target.
+        var flip: FocusFlip?
+        defer { restore(flip) }
         let background = effectiveBackground(input.background)
         let chord = try parseKeyChord(input.keys)
         let (app, window) = try keyboardTarget(input.app)
-        prepareTarget(app: app, window: window, background: background, action: .pressKey)
+        flip = prepareTarget(app: app, window: window, background: background, action: .pressKey)
         // The chord parse yields ANSI key codes; remap character keys to the
         // ACTIVE keyboard layout (on e.g. Dvorak the ANSI "c" code types "j",
         // so Cmd+c would fire an unbound shortcut and silently no-op).
@@ -639,6 +666,10 @@ public final class Actuator {
 
     public func typeText(_ input: TypeTextInput) throws -> ActionResult {
         try guardNotPaused()
+        // Function scope, so the restore runs after the events are posted —
+        // not at the end of whichever branch resolved the target.
+        var flip: FocusFlip?
+        defer { restore(flip) }
         let background = effectiveBackground(input.background)
         let app: NSRunningApplication
         let window: AXUIElement?
@@ -653,7 +684,7 @@ public final class Actuator {
         } else {
             (app, window) = try keyboardTarget(input.app)
         }
-        prepareTarget(app: app, window: window, background: background, action: .typeText)
+        flip = prepareTarget(app: app, window: window, background: background, action: .typeText)
         // After prepareTarget: in foreground mode the activation moves focus
         // around, so focusing the element first would be undone by the raise.
         if let focusTarget, let index = input.element_index {
@@ -676,6 +707,10 @@ public final class Actuator {
 
     public func scroll(_ input: ScrollInput) throws -> ActionResult {
         try guardNotPaused()
+        // Function scope, so the restore runs after the events are posted —
+        // not at the end of whichever branch resolved the target.
+        var flip: FocusFlip?
+        defer { restore(flip) }
         let background = effectiveBackground(input.background)
         let vertical: Bool
         let sign: Double
@@ -702,7 +737,7 @@ public final class Actuator {
         }
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
-        prepareTarget(app: app, window: window, background: background, action: .scroll)
+        flip = prepareTarget(app: app, window: window, background: background, action: .scroll)
 
         // Move the cursor over the element's VISIBLE center, then post pixel
         // scrolls of one visible-height/width per page. Scrollable content
@@ -729,11 +764,15 @@ public final class Actuator {
 
     public func setValue(_ input: SetValueInput) throws -> ActionResult {
         try guardNotPaused()
+        // Function scope, so the restore runs after the events are posted —
+        // not at the end of whichever branch resolved the target.
+        var flip: FocusFlip?
+        defer { restore(flip) }
         let background = effectiveBackground(input.background)
         let app = try resolveApproved(input.app)
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
-        prepareTarget(app: app, window: window, background: background, action: .setValue)
+        flip = prepareTarget(app: app, window: window, background: background, action: .setValue)
         let before = valueString(of: element)
         let err = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, input.value as CFString)
         guard err == .success else { throw mapAXError(err, action: "set_value[\(input.element_index)]") }
@@ -757,6 +796,10 @@ public final class Actuator {
 
     public func drag(_ input: DragInput) throws -> ActionResult {
         try guardNotPaused()
+        // Function scope, so the restore runs after the events are posted —
+        // not at the end of whichever branch resolved the target.
+        var flip: FocusFlip?
+        defer { restore(flip) }
         let background = effectiveBackground(input.background)
         let (button, down, up, dragged) = try mouseButton(input.mouse_button)
         // Before prepareTarget, as in click.
@@ -771,7 +814,7 @@ public final class Actuator {
             let resolved = try displayTarget(input.app, at: from)
             app = resolved.app
             windowElement = resolved.window
-            prepareTarget(app: app, window: resolved.window, background: background, action: .drag)
+            flip = prepareTarget(app: app, window: resolved.window, background: background, action: .drag)
         } else {
             guard let appIdentifier = input.app else {
                 throw SkyServiceError(code: .invalidParams,
@@ -780,7 +823,7 @@ public final class Actuator {
             let (resolvedApp, window, geometry) = try target(appIdentifier, needsGeometry: true)
             app = resolvedApp
             windowElement = window
-            prepareTarget(app: app, window: window, background: background, action: .drag)
+            flip = prepareTarget(app: app, window: window, background: background, action: .drag)
             from = globalPoint(fromScreenshotX: input.from_x, y: input.from_y, geometry: geometry!)
             to = globalPoint(fromScreenshotX: input.to_x, y: input.to_y, geometry: geometry!)
         }
@@ -804,11 +847,15 @@ public final class Actuator {
 
     public func performSecondaryAction(_ input: PerformSecondaryActionInput) throws -> ActionResult {
         try guardNotPaused()
+        // Function scope, so the restore runs after the events are posted —
+        // not at the end of whichever branch resolved the target.
+        var flip: FocusFlip?
+        defer { restore(flip) }
         let background = effectiveBackground(input.background)
         let app = try resolveApproved(input.app)
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
-        prepareTarget(app: app, window: window, background: background, action: .performSecondaryAction)
+        flip = prepareTarget(app: app, window: window, background: background, action: .performSecondaryAction)
         let err = AXUIElementPerformAction(element, input.action as CFString)
         guard err == .success else { throw mapAXError(err, action: "perform_secondary_action(\(input.action))") }
         postActionSleep()
@@ -861,11 +908,15 @@ public final class Actuator {
     /// selection range (or collapse to a cursor) via kAXSelectedTextRangeAttribute.
     public func selectText(_ input: SelectTextInput) throws -> ActionResult {
         try guardNotPaused()
+        // Function scope, so the restore runs after the events are posted —
+        // not at the end of whichever branch resolved the target.
+        var flip: FocusFlip?
+        defer { restore(flip) }
         let background = effectiveBackground(input.background)
         let app = try resolveApproved(input.app)
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
-        prepareTarget(app: app, window: window, background: background, action: .selectText)
+        flip = prepareTarget(app: app, window: window, background: background, action: .selectText)
         guard let value: String = axAttribute(element, kAXValueAttribute) else {
             throw SkyServiceError(code: .elementNotActionable,
                                   message: "select_text[\(input.element_index)]: element has no text value")

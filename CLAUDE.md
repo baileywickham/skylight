@@ -143,6 +143,16 @@ real executable path, since it runs via a brew-bin symlink.
   keycodes via `UCKeyTranslate` for the active layout — the QWERTY table is wrong
   on **Dvorak** (Cmd+C would post Cmd+J) — and posts real held `flagsChanged`
   modifier events so NSMenu equivalents (Cmd+C/V) actually fire.
+- **The focus flip is now put back.** `focusWithoutRaise` tells the user's
+  frontmost app it went inactive so the target can believe it is active; every
+  action that flips now `defer`s a `restoreFocus` (the mirror sequence:
+  deactivate the target, reactivate the app that was front) once its events have
+  been delivered and `postActionSleep` has run. Before this the user's app sat
+  dimmed — greyed title bar, no caret, inactive-state behavior — until they
+  clicked it, while macOS still called it frontmost and their typing still
+  reached it, and the target was left stuck believing it was frontmost. Check it
+  with `frontmost of process "<app>"` in System Events (the AX attribute, not
+  NSWorkspace's, which never sees any of this); `fixes-check` asserts it.
 - **Activation vs focus:** actions run in the **background by default**. A request
   without `background` resolves through `BackgroundSettings`: `settings.json`
   (`skylight background on|off|auto`, re-read per request, no restart) >

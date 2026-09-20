@@ -69,6 +69,53 @@ public func focusWithoutRaiseSequence(targetWindowID: CGWindowID,
     return steps
 }
 
+/// What a focus flip changed, so it can be put back. Returned by
+/// `focusWithoutRaise` when it actually flipped something.
+public struct FocusFlip {
+    public let target: ProcessSerialNumber
+    public let previousFront: ProcessSerialNumber
+    public let targetWindowID: CGWindowID
+
+    public init(target: ProcessSerialNumber, previousFront: ProcessSerialNumber,
+                targetWindowID: CGWindowID) {
+        self.target = target
+        self.previousFront = previousFront
+        self.targetWindowID = targetWindowID
+    }
+}
+
+/// The records that UNDO a focus flip: the target goes back to believing it is
+/// inactive, and the app that was frontmost when we started is told it is
+/// active again.
+///
+/// Without this the user's app is left believing it was deactivated — dimmed
+/// title bar, no caret — until they click it, even though macOS still considers
+/// it frontmost and their keystrokes still reach it. Background mode promises
+/// not to disturb them; half-restoring is not that.
+///
+/// Pure, so the sequence is asserted in tests rather than inferred from live
+/// window-server behavior. The key-window pair is deliberately not re-sent: we
+/// never changed the previous app's key window, only the apps' active flags and
+/// the target's key window.
+public func focusRestoreSequence(targetWindowID: CGWindowID) -> [FocusStep] {
+    [FocusStep(destination: .targetProcess,
+               record: EventRecord.activation(windowID: targetWindowID, activate: false)),
+     FocusStep(destination: .frontProcess,
+               record: EventRecord.activation(windowID: 0, activate: true))]
+}
+
+/// Puts back what `focusWithoutRaise` changed. Best effort: a failed record
+/// leaves the user's app looking inactive, which is the status quo ante of this
+/// function, not a new failure mode.
+public func restoreFocus(_ flip: FocusFlip) {
+    for step in focusRestoreSequence(targetWindowID: flip.targetWindowID) {
+        switch step.destination {
+        case .targetProcess: _ = SkyLightBridge.post(record: step.record, to: flip.target)
+        case .frontProcess: _ = SkyLightBridge.post(record: step.record, to: flip.previousFront)
+        }
+    }
+}
+
 /// Makes `window`'s app AppKit-active and `window` its key window without
 /// raising either — the background-mode counterpart of `activateAndRaise`.
 ///
@@ -78,32 +125,38 @@ public func focusWithoutRaiseSequence(targetWindowID: CGWindowID,
 /// while deliberately never calling SLPSSetFrontProcessWithOptions (which is
 /// what would raise the window and switch Spaces).
 ///
-/// Returns false — and changes nothing — when the private symbols or the
-/// window id are unavailable, leaving background mode exactly as it behaved
-/// before: per-pid events only, best-effort.
+/// Returns nil — and changes nothing — when the private symbols or the window
+/// id are unavailable, leaving background mode exactly as it behaved before:
+/// per-pid events only, best-effort. Otherwise it returns what it changed, so
+/// the caller can hand it to `restoreFocus` once the action's events have been
+/// delivered.
+///
+/// Nothing is returned when the target was ALREADY the front process: there is
+/// no deactivation to undo, and "restoring" would tell the app the user is
+/// looking at that it went inactive.
 @discardableResult
-public func focusWithoutRaise(app: NSRunningApplication, window: AXUIElement) -> Bool {
+public func focusWithoutRaise(app: NSRunningApplication, window: AXUIElement) -> FocusFlip? {
     guard SkyLightBridge.canFocusWithoutRaise,
           let targetWindowID = axWindowID(of: window),
           let targetPSN = SkyLightBridge.processSerialNumber(forPid: app.processIdentifier)
-    else { return false }
+    else { return nil }
 
     let front = SkyLightBridge.frontProcess()
     let frontIsTarget = front.map { psnEquals($0, targetPSN) } ?? false
     let steps = focusWithoutRaiseSequence(targetWindowID: targetWindowID,
                                           frontWindowID: 0,
                                           frontIsTarget: frontIsTarget)
-    var allPosted = true
     for step in steps {
         switch step.destination {
         case .frontProcess:
-            guard let front else { allPosted = false; continue }
-            allPosted = SkyLightBridge.post(record: step.record, to: front) && allPosted
+            guard let front else { continue }
+            _ = SkyLightBridge.post(record: step.record, to: front)
         case .targetProcess:
-            allPosted = SkyLightBridge.post(record: step.record, to: targetPSN) && allPosted
+            _ = SkyLightBridge.post(record: step.record, to: targetPSN)
         }
     }
-    return allPosted
+    guard let front, !frontIsTarget else { return nil }
+    return FocusFlip(target: targetPSN, previousFront: front, targetWindowID: targetWindowID)
 }
 
 /// Chromium gates synthetic input on a user-activation signal: a click posted

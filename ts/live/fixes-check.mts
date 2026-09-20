@@ -141,6 +141,14 @@ const frontmost = () =>
   execFileSync("/usr/bin/osascript",
     ["-e", 'tell application "System Events" to return name of first application process whose frontmost is true'])
     .toString().trim();
+// What the app ITSELF believes. Background actuation flips this to make the
+// target active without raising it, and the user's app must be put back: macOS
+// still calls it frontmost either way, but the app dims its title bar, stops
+// its caret and behaves as if you switched away.
+const believesFrontmost = (name: string) =>
+  execFileSync("/usr/bin/osascript",
+    ["-e", `tell application "System Events" to return frontmost of process "${name}"`])
+    .toString().trim() === "true";
 const frontBefore = frontmost();
 const shot = (await sky.get_app_state({ app, disableDiff: true, include_data_url: false })).screenshot;
 if (shot == null) throw new Error("no screenshot: coordinate clicks need capture geometry");
@@ -175,6 +183,9 @@ check("background click lands where it was aimed",
   + `got ${landedX},${landed} (y mirrored would be ≈${Math.round(innerH - expected)})`);
 check("background click did not steal focus",
   frontBefore !== app && frontAfter === frontBefore, `${frontBefore} -> ${frontAfter}`);
+check("the user's app was left believing it is active",
+  believesFrontmost(frontBefore),
+  `${frontBefore} believes frontmost: ${believesFrontmost(frontBefore)}`);
 
 // 7. The same, in a NATIVE app. This is what the Chromium-only gate wrongly
 // refused, so it needs live coverage: a regression here goes straight back to
@@ -198,6 +209,7 @@ check("background click lands in a native app",
   /A{2,}\[N\]A{2,}/.test(nativeLine),
   nativeLine.slice(0, 90));
 check("native click did not steal focus either", frontmost() === frontBefore, frontmost());
+check("and still believes it after the native click too", believesFrontmost(frontBefore));
 
 execFileSync("/usr/bin/osascript", ["-e",
   'tell application "TextEdit" to close (every document whose name is "native.txt") saving no']);
