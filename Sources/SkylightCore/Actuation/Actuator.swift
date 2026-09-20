@@ -323,11 +323,10 @@ public final class Actuator {
     /// these go per-pid, so the app sees a pointer the user's real cursor never
     /// followed — which is the whole point: hover-only affordances render
     /// without disturbing anyone.
-    private func postHover(app: NSRunningApplication, point: CGPoint, background: Bool, settleMs: Int,
-                           window: MouseWindow? = nil) {
+    private func postHover(app: NSRunningApplication, point: CGPoint, background: Bool, settleMs: Int) {
         let approach = CGPoint(x: point.x - 1, y: point.y - 1)
         for (p, delta) in [(approach, 0.0), (point, 1.0)] {
-            let event = makeMouse(.mouseMoved, at: p, clickCount: 0, window: window, background: background)
+            let event = makeMouse(.mouseMoved, at: p, clickCount: 0, window: nil, background: background)
             // Deltas last: they are what an app tracks hover by, and the
             // NSEvent construction does not carry them.
             event?.setDoubleValueField(.mouseEventDeltaX, value: delta)
@@ -406,7 +405,11 @@ public final class Actuator {
             return event
         }
         let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: button)
-        event?.setIntegerValueField(.mouseEventClickState, value: Int64(max(clickCount, 1)))
+        // Click state belongs to a press, not to a move: a mouseMoved carrying
+        // clickState 1 claims a button is down.
+        if BackgroundMouse.isButtonEvent(type) {
+            event?.setIntegerValueField(.mouseEventClickState, value: Int64(max(clickCount, 1)))
+        }
         return event
     }
 
@@ -511,7 +514,7 @@ public final class Actuator {
             // before: the primer would otherwise undo the hover.
             if input.hover ?? true {
                 postHover(app: app, point: point, background: background,
-                          settleMs: preClickHoverSettleMs, window: window)
+                          settleMs: preClickHoverSettleMs)
             }
             let (button, down, up, _) = try mouseButton(input.mouse_button)
             let clicks = input.click_count ?? 1
@@ -541,7 +544,6 @@ public final class Actuator {
         let background = effectiveBackground(input.background)
         let app: NSRunningApplication
         let point: CGPoint
-        var hoverWindow: MouseWindow?
         if let index = input.element_index {
             guard let appIdentifier = input.app else {
                 throw SkyServiceError(code: .invalidParams, message: "hover by element_index needs app")
@@ -550,15 +552,13 @@ public final class Actuator {
             let element = try capture.element(forIndex: index, appPid: app.processIdentifier)
             let window = try capturedWindow(of: app)
             point = try pointerPoint(element: element, window: window, action: "hover[\(index)]")
-            hoverWindow = mouseWindow(window)
             prepareTarget(app: app, window: window, background: background, action: .hover)
         } else if let x = input.x, let y = input.y {
             if let displayID = input.display_id {
                 point = try displayPoint(x: x, y: y, displayID: displayID)
                 let resolved = try displayTarget(input.app, at: point)
                 app = resolved.app
-                hoverWindow = mouseWindow(resolved.window)
-                prepareTarget(app: app, window: resolved.window, background: background, action: .hover)
+                    prepareTarget(app: app, window: resolved.window, background: background, action: .hover)
             } else {
                 guard let appIdentifier = input.app else {
                     throw SkyServiceError(code: .invalidParams,
@@ -566,8 +566,7 @@ public final class Actuator {
                 }
                 let (resolvedApp, window, geometry) = try target(appIdentifier, needsGeometry: true)
                 app = resolvedApp
-                hoverWindow = mouseWindow(window)
-                prepareTarget(app: app, window: window, background: background, action: .hover)
+                    prepareTarget(app: app, window: window, background: background, action: .hover)
                 point = globalPoint(fromScreenshotX: x, y: y, geometry: geometry!)
             }
         } else {
@@ -576,7 +575,7 @@ public final class Actuator {
         // Hold the pointer there: hover UI often fades in, and the caller's
         // next get_app_state must see the settled state, not the transition.
         postHover(app: app, point: point, background: background,
-                  settleMs: hoverSettleMs(input.settle_ms), window: hoverWindow)
+                  settleMs: hoverSettleMs(input.settle_ms))
         return ActionResult(done: true)
     }
 

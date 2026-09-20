@@ -57,7 +57,7 @@ export interface SkyLightCapabilities {
   focus_without_raise: boolean;
   /** Experimental SkyLight event channel; opt in with SKYLIGHT_TRUSTED_EVENTS=1. */
   trusted_events: boolean;
-  /** Background mouse BUTTON events can be built (the private window-location stamp resolved). False → background click/drag are ignored by the target app; pass background: false. */
+  /** Background mouse BUTTON events can actually be delivered: the private window-location stamp resolved AND the app can be made active without raising it (both are required). False → background click/drag fail background_unavailable; pass background: false, or click by element_index. */
   background_mouse_events: boolean;
   /** Windows can be queried for / moved to the active Space (bring_to_active_space). */
   space_management: boolean;

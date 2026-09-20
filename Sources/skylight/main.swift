@@ -16,7 +16,7 @@ func doctor() {
         print("     symbols skylight uses to activate an app without raising it.")
     }
     print("  trusted events:   \(caps.trusted_events ? "enabled" : "off (experimental; SKYLIGHT_TRUSTED_EVENTS=1)")")
-    print("  bg mouse events:  \(caps.background_mouse_events ? "available" : "UNAVAILABLE (background click/drag need background: false)")")
+    print("  bg mouse events:  \(caps.background_mouse_events ? "available" : "UNAVAILABLE (needs the window stamp AND focus-without-raise; use background: false)")")
     print("  spaces:           \(caps.space_management ? "available" : "UNAVAILABLE (bring_to_active_space disabled)")")
     let background = cliBackgroundSettings()
     print("  background:       \(background.mode().mode.rawValue) → actions default to \(background.resolvedDefault() ? "background" : "foreground") ('skylight background on|off|auto')")
