@@ -66,13 +66,23 @@ final class FocusWithoutRaiseTests: XCTestCase {
     /// their element regardless of focus, so disturbing the user's front app
     /// for them would be cost without benefit.
     func testOnlyEventDeliveringActionsNeedFocus() {
-        for action: ActuatorAction in [.coordinateClick, .pressKey, .typeText, .scroll, .drag] {
+        for action: ActuatorAction in [.coordinateClick, .pressKey, .typeText, .scroll, .drag, .hover] {
             XCTAssertTrue(deliversSyntheticEvents(action: action), "\(action)")
         }
-        // `hover` posts an event but is not here: the focus flip does not make
-        // a non-key window accept a hover, so it would disturb for nothing.
-        for action: ActuatorAction in [.elementClick, .setValue, .performSecondaryAction, .selectText, .hover] {
+        for action: ActuatorAction in [.elementClick, .setValue, .performSecondaryAction, .selectText] {
             XCTAssertFalse(deliversSyntheticEvents(action: action), "\(action)")
         }
+    }
+
+    /// `hover` joined the first list on 2026-09-19. A pointer move produces
+    /// `:hover` in Chromium only while the target app is ACTIVE, so without the
+    /// flip a background hover silently did nothing whenever the browser was
+    /// not frontmost — measured: the same hover reveals a hover-only button
+    /// with Chrome frontmost, does nothing with Finder frontmost, and works
+    /// again once any action has run the flip. The older claim that the flip
+    /// does not help was measured against a NON-KEY window of the same app,
+    /// which is a different case and still true.
+    func testHoverPaysForTheFocusFlip() {
+        XCTAssertTrue(deliversSyntheticEvents(action: .hover))
     }
 }
