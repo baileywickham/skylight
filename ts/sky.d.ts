@@ -49,6 +49,8 @@ export interface SkyLightCapabilities {
     focus_without_raise: boolean;
     /** Experimental SkyLight event channel; opt in with SKYLIGHT_TRUSTED_EVENTS=1. */
     trusted_events: boolean;
+    /** Background mouse BUTTON events can be built (the private window-location stamp resolved). False → background click/drag are ignored by the target app; pass background: false. */
+    background_mouse_events: boolean;
     /** Windows can be queried for / moved to the active Space (bring_to_active_space). */
     space_management: boolean;
 }
@@ -197,6 +199,8 @@ export interface GetAppStateInput {
     max_depth?: number;
     /** Node budget (default 5000). */
     max_nodes?: number;
+    /** Serialize only this element's subtree (an index from an earlier capture) instead of the whole window — the pane you are working in, so another webview's churn stays out of the tree and the diff. The screenshot and click coordinates still describe the whole window. */
+    root_element_index?: number;
 }
 export interface ClickInput {
     /** Required with element_index or window coordinates. Optional with display_id: the app under the point is hit-tested (frontmost as fallback). */
@@ -233,6 +237,8 @@ export interface PressKeyInput {
     app?: AppIdentifier;
     /** "+"-separated chord of X-keysym-style names, e.g. "Ctrl+Shift+t". */
     keys: string;
+    /** Send the chord this many times (default 1, capped at 200) — one call instead of N round trips. A chord cannot express repetition ("BackSpace BackSpace" is not a chord). */
+    repeat?: number;
     /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
     background?: boolean;
 }
@@ -240,6 +246,8 @@ export interface TypeTextInput {
     /** Default: the frontmost app. */
     app?: AppIdentifier;
     text: string;
+    /** Focus this element first (needs `app`). Without it the text goes wherever focus happens to be — another field, or nowhere — and the call still reports success. With it, a field that will not take focus is an error. */
+    element_index?: number;
     /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
     background?: boolean;
 }

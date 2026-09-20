@@ -48,6 +48,11 @@ public enum SkyErrorCode: String, Codable {
     case actuationPaused = "actuation_paused"
     case invalidParams = "invalid_params"
     case approvalRequired = "approval_required"
+    /// The action cannot be delivered without taking focus (background
+    /// coordinate click/drag/scroll outside the Chromium family — see
+    /// `BackgroundMouse`). Retry with `background: false`, or act by
+    /// `element_index`, which needs no focus at all.
+    case backgroundUnavailable = "background_unavailable"
 }
 
 public struct SkyServiceError: Error {

@@ -306,6 +306,33 @@
         "max_dimension": 1568
       },
       "line": "{\"id\":1,\"method\":\"zoom\",\"params\":{\"app\":\"Claude\",\"window_id\":4242,\"x\":0,\"y\":0,\"width\":200,\"height\":80,\"max_dimension\":1568}}"
+    },
+    {
+      "method": "get_app_state",
+      "params": {
+        "app": "Claude",
+        "root_element_index": 1969,
+        "disableDiff": true
+      },
+      "line": "{\"id\":1,\"method\":\"get_app_state\",\"params\":{\"app\":\"Claude\",\"root_element_index\":1969,\"disableDiff\":true}}"
+    },
+    {
+      "method": "press_key",
+      "params": {
+        "app": "Notes",
+        "keys": "BackSpace",
+        "repeat": 20
+      },
+      "line": "{\"id\":1,\"method\":\"press_key\",\"params\":{\"app\":\"Notes\",\"keys\":\"BackSpace\",\"repeat\":20}}"
+    },
+    {
+      "method": "type_text",
+      "params": {
+        "app": "Google Chrome",
+        "text": "hello",
+        "element_index": 42
+      },
+      "line": "{\"id\":1,\"method\":\"type_text\",\"params\":{\"app\":\"Google Chrome\",\"text\":\"hello\",\"element_index\":42}}"
     }
   ],
   "responses": [
@@ -321,7 +348,8 @@
         "skylight": {
           "focus_without_raise": true,
           "trusted_events": false,
-          "space_management": true
+          "space_management": true,
+          "background_mouse_events": true
         },
         "background_mode": "auto",
         "background_default": true,

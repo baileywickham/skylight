@@ -140,6 +140,8 @@ server.registerTool("get_app_state", {
     include_screenshot: z.boolean().optional().describe("Default true. false returns only the tree (faster, cheaper)."),
     max_depth: z.number().int().positive().optional().describe("Tree depth budget, default 60. Raise it (e.g. 120) when the tree truncates with \"max depth … reached\" over the part you need — deep Chromium/Electron web content is the usual cause."),
     max_nodes: z.number().int().positive().optional().describe("Node budget, default 5000."),
+    root_element_index: z.number().int().optional()
+      .describe("Capture only this element's subtree (an index from an earlier capture) instead of the whole window — use it to work in one pane of an Electron app without an unrelated webview flooding the diff. Screenshot and click coordinates still cover the whole window."),
   },
   annotations: { readOnlyHint: true },
 }, (input) => run(async () => {
@@ -147,6 +149,7 @@ server.registerTool("get_app_state", {
     app: input.app,
     window_id: input.window_id,
     disableDiff: input.disable_diff,
+    root_element_index: input.root_element_index,
     include_data_url: input.include_screenshot ?? true,
     max_dimension: input.max_dimension ?? MAX_DIMENSION,
     max_depth: input.max_depth,
@@ -156,7 +159,7 @@ server.registerTool("get_app_state", {
 }));
 
 server.registerTool("click", {
-  description: "Click. Either element_index (from get_app_state, preferred), or x/y pixels of the latest get_app_state screenshot of `app`, or x/y pixels of the latest `screenshot` when display_id is given (then app is optional: the app under the point is used).",
+  description: "Click. Either element_index (from get_app_state, preferred — an AX press, works without focus in any app), or x/y pixels of the latest get_app_state screenshot of `app`, or x/y pixels of the latest `screenshot` when display_id is given (then app is optional: the app under the point is used). Coordinate clicks in the background only reach Chromium/Electron apps; in other apps they fail background_unavailable, so use element_index or background: false.",
   inputSchema: {
     app: app.optional(),
     element_index: z.number().int().optional(),
@@ -184,17 +187,29 @@ server.registerTool("hover", {
 }, (input) => run(async () => text(await sky.hover(input))));
 
 server.registerTool("press_key", {
-  description: "Press a key chord: \"+\"-separated X-keysym names, e.g. \"Return\", \"Cmd+s\", \"Ctrl+Shift+Tab\", \"Escape\". Defaults to the frontmost app.",
-  inputSchema: { app: app.optional(), keys: z.string(), background },
+  description: "Press a key chord: \"+\"-separated X-keysym names, e.g. \"Return\", \"Cmd+s\", \"Ctrl+Shift+Tab\", \"Escape\". Defaults to the frontmost app. Use repeat to send it N times in one call.",
+  inputSchema: {
+    app: app.optional(),
+    keys: z.string(),
+    repeat: z.number().int().positive().optional()
+      .describe("Send the chord this many times (default 1, capped at 200). A chord cannot express repetition, so this is how you delete 20 characters in one call."),
+    background,
+  },
 }, (input) => run(async () => text(await sky.press_key(input))));
 
 server.registerTool("type_text", {
-  description: "Type text at the current caret (click the field first unless the app focuses it). Defaults to the frontmost app. Apps may autocorrect; verify by re-capturing.",
-  inputSchema: { app: app.optional(), text: z.string(), background },
+  description: "Type text. Pass element_index (with app) to focus that field first — without it the text goes wherever focus happens to be, which may be another field or nowhere. Apps may autocorrect; verify by re-capturing.",
+  inputSchema: {
+    app: app.optional(),
+    text: z.string(),
+    element_index: z.number().int().optional()
+      .describe("Focus this element (from get_app_state) before typing; needs app. Errors if the element will not take focus, instead of typing into the wrong place."),
+    background,
+  },
 }, (input) => run(async () => text(await sky.type_text(input))));
 
 server.registerTool("scroll", {
-  description: "Scroll an element from get_app_state by pages of its visible size.",
+  description: "Scroll an element from get_app_state by pages of its visible size. Needs background: false (which activates the app): a scroll wheel cannot be delivered to a background app.",
   inputSchema: {
     app,
     element_index: z.number().int(),
@@ -205,12 +220,12 @@ server.registerTool("scroll", {
 }, (input) => run(async () => text(await sky.scroll({ ...input, pages: input.pages ?? 1 }))));
 
 server.registerTool("set_value", {
-  description: "Set an element's AX value directly (text fields, sliders, checkboxes) without keystrokes.",
+  description: "Set an element's AX value directly (text fields, sliders, checkboxes) without keystrokes. Verified: if the app accepts the write and keeps its old value (a controlled web input), this errors instead of reporting success.",
   inputSchema: { app, element_index: z.number().int(), value: z.string(), background },
 }, (input) => run(async () => text(await sky.set_value(input))));
 
 server.registerTool("drag", {
-  description: "Drag from one point to another. Pixels of the latest get_app_state screenshot of `app`, or of the latest `screenshot` when display_id is given (app then optional).",
+  description: "Drag from one point to another. Pixels of the latest get_app_state screenshot of `app`, or of the latest `screenshot` when display_id is given (app then optional). Like click, a background drag only reaches Chromium/Electron apps.",
   inputSchema: {
     app: app.optional(),
     from_x: z.number(), from_y: z.number(), to_x: z.number(), to_y: z.number(),

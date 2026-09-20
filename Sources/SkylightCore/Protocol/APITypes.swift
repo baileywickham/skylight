@@ -311,8 +311,15 @@ public struct GetAppStateInput: Codable, Equatable {
     public let max_depth: Int?
     /// Node budget for this capture (default 5000).
     public let max_nodes: Int?
+    /// Serialize only the subtree under this element (an index from an earlier
+    /// capture) instead of the whole window — the pane you are working in, so
+    /// an unrelated webview's churn stays out of the tree and out of the diff.
+    /// The screenshot and click geometry still describe the whole window, so
+    /// coordinates mean the same thing either way.
+    public let root_element_index: Int?
     public init(app: String, window_id: Int? = nil, disableDiff: Bool? = nil, include_data_url: Bool? = nil,
-                max_dimension: Int? = nil, max_depth: Int? = nil, max_nodes: Int? = nil) {
+                max_dimension: Int? = nil, max_depth: Int? = nil, max_nodes: Int? = nil,
+                root_element_index: Int? = nil) {
         self.app = app
         self.window_id = window_id
         self.disableDiff = disableDiff
@@ -320,6 +327,7 @@ public struct GetAppStateInput: Codable, Equatable {
         self.max_dimension = max_dimension
         self.max_depth = max_depth
         self.max_nodes = max_nodes
+        self.root_element_index = root_element_index
     }
 }
 
@@ -393,12 +401,18 @@ public struct PressKeyInput: Codable, Equatable {
     /// Default: the frontmost app.
     public let app: String?
     public let keys: String            // "+"-separated chord, e.g. "Ctrl+Shift+t"
+    /// Send the chord this many times (default 1, capped at
+    /// `maxKeyRepeat`). One call for "delete the last 20 characters" instead
+    /// of 20 round trips; the chord grammar has no room for a repeat because
+    /// "BackSpace BackSpace" is not a chord.
+    public let `repeat`: Int?
     /// Per-request background override: true = never activate / post per-pid,
     /// false = force activation, absent = daemon default (`skylight background`).
     public let background: Bool?
-    public init(app: String? = nil, keys: String, background: Bool? = nil) {
+    public init(app: String? = nil, keys: String, repeat repeatCount: Int? = nil, background: Bool? = nil) {
         self.app = app
         self.keys = keys
+        self.`repeat` = repeatCount
         self.background = background
     }
 }
@@ -407,12 +421,19 @@ public struct TypeTextInput: Codable, Equatable {
     /// Default: the frontmost app.
     public let app: String?
     public let text: String
+    /// Focus this element before typing (needs `app`). Without it the text
+    /// goes wherever focus happens to be — which, when a click did not take or
+    /// the page moved focus on its own, is another field or nowhere at all,
+    /// and the call still reports success. With it, a field that will not take
+    /// focus is an error instead of text in the wrong place.
+    public let element_index: Int?
     /// Per-request background override: true = never activate / post per-pid,
     /// false = force activation, absent = daemon default (`skylight background`).
     public let background: Bool?
-    public init(app: String? = nil, text: String, background: Bool? = nil) {
+    public init(app: String? = nil, text: String, element_index: Int? = nil, background: Bool? = nil) {
         self.app = app
         self.text = text
+        self.element_index = element_index
         self.background = background
     }
 }

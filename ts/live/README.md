@@ -59,3 +59,21 @@ cd ts && pnpm exec tsx live/hover-check.mts "Google Chrome"
 ```
 
 Expect `HOVER-SEEN PASS`, `REVEALED-ELEMENT PASS` and `CLICKED-REVEALED PASS`.
+
+## fixes-check.mts
+
+Covers the four 2026-09-19 fixes in one pass against a throwaway page it opens
+itself: `type_text` with an `element_index` lands in the named field (never
+focused beforehand), `press_key` with `repeat` sends the chord N times,
+`set_value` errors on a controlled React input that discards the write while
+still accepting a normal one, and `get_app_state` with `root_element_index`
+returns a pane-sized tree whose diff stays `(no changes)` while a second pane
+keeps ticking. Expect five PASS lines.
+
+```bash
+cd ts && npx tsx live/fixes-check.mts "Google Chrome"
+```
+
+Assertions track fields by sticky `element_index`, not by label: a node prints
+its label or its value, so a labelled field stops matching its label as soon as
+it holds text.

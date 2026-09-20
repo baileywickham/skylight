@@ -215,6 +215,52 @@ real executable path, since it runs via a brew-bin symlink.
   window's renderer looks to be the thing ignoring input while it is in the
   background. Hover a window the user is actually looking at, or raise it
   first.
+- **An AX write that "succeeds" may have been thrown away.** `set_value` reads
+  the value back and fails with `element_not_actionable` when the element still
+  holds its old value: a controlled web input (React and friends) re-renders
+  from its own state and discards the write, and `AXUIElementSetAttributeValue`
+  returns `.success` either way — verified live in Chromium. A value the app
+  *normalized* (trimmed, reformatted, clamped) counts as applied; only
+  "unchanged and not what we asked" is an error (`valueWriteLanded`). Same
+  shape for focus: `AXFocused` returns success on an element that never takes
+  focus, so `type_text`'s `element_index` polls `kAXFocusedUIElement` until it
+  matches (Chromium needs ~300ms) rather than trusting the setter.
+- **A node prints its label OR its value, never both** (`fallbackAXLabel`), so a
+  labelled field loses its label in the tree the moment it has text in it. Track
+  fields by their sticky `element_index`, not by matching the label again.
+- **Background mouse BUTTONS need the window-stamped construction** (macOS 27.0
+  26A428, 2026-09-19). A CGEvent built from scratch and posted with
+  `CGEventPostToPid` is delivered to the process and then ignored — no field in
+  it says which window the click belongs to, so AppKit resolves no view. The
+  failure is silent and confusing: keystrokes and mouse MOVES land (so `hover`
+  works), the click that follows does nothing, and the call returns done:true.
+  Apple documents `CGEventPostToPid` only as a way to re-route events captured
+  from a tap, so a synthesized one landing was never a guarantee.
+  `BackgroundMouse` fixes it for the Chromium family: an NSEvent built with the
+  target's `windowNumber`, fields 91/92 stamped with the CGWindowID, and the
+  window-local point stamped through the private `CGEventSetWindowLocation`.
+  All three are required — each was removed in turn and the click stopped
+  landing — plus the `focusWithoutRaise` that background actions already do.
+  **Scope, verified live, do not over-claim it:** it lands in Chromium/Electron
+  (Chrome, the Claude app, VS Code, Slack) and **not in AppKit** — TextEdit
+  ignores the stamped event, the plain one, and the Command-modifier
+  click-through variant alike, while the identical foreground click lands
+  instantly. So a background coordinate click/drag outside the Chromium family
+  is refused with `background_unavailable` rather than posted into the void
+  (`backgroundPointerReaches`), and `element_index` actions — an AX press, no
+  focus needed — remain the way to click anything, anywhere.
+  **Moves must stay plain CGEvents**: an NSEvent-built move stops registering as
+  a hover in Chromium, taking every hover-only control with it.
+  **Scroll has no fix**: wheel events have no NSEvent constructor, so they
+  cannot carry the stamp, and background `scroll` is refused too — use
+  `background: false`.
+  Dead ends, already covered, don't repeat them: event-shaping variants on a
+  plain CGEvent (source, pressure/subtype/eventNumber, timing, no preceding
+  move, warping the real cursor), `CGEventPostToPSN`, a `tccutil reset
+  PostEvent` plus daemon restart (no PostEvent check is ever logged), and
+  SkyLight's own `SLEventPostToPid`, which is present but rejects plain
+  CGEvents with `0xb0000000` — it wants `SLEventSetAuthenticationMessage`,
+  which is undocumented.
 - **TCC / signing:** the daemon must be launched via its LaunchAgent or `open -a`,
   **never as a terminal child** (TCC attributes the grant to the responsible
   process otherwise). Sign with a **stable identity** (not ad-hoc — ad-hoc cdhash
@@ -249,22 +295,30 @@ real executable path, since it runs via a brew-bin symlink.
 
 ## API methods
 
-`capabilities` (TCC grants + which private SkyLight capabilities resolved +
+`capabilities` (TCC grants + which private SkyLight capabilities resolved,
+including `background_mouse_events` — whether a background click can be built at all — +
 `background_mode`/`background_default`/`parallel_actuation` — check this before assuming
 background mode is fully reliable on a given macOS build),
 `list_apps` (regular apps; `include_menu_bar_apps` adds accessory/LSUIElement
 apps tagged `menu_bar_only` — always resolvable by name regardless),
 `list_windows` (per-app windows with CGWindowIDs), `get_app_state`
 (AX text + screenshot; diffs by default, `disableDiff` forces full; `window_id`
-targets a non-focused window; `max_depth`/`max_nodes` lift the tree caps; degrades to AX-only + `screenshot_error` when the
+targets a non-focused window; `max_depth`/`max_nodes` lift the tree caps;
+`root_element_index` scopes the walk to one element's subtree — the pane you are
+working in, so another webview's churn stays out of the tree AND the diff (the
+screenshot and click geometry still cover the whole window, so coordinates are
+unchanged); degrades to AX-only + `screenshot_error` when the
 screenshot fails; window-less menu-bar apps capture a synthetic `AXMenuBarApp`
 root over the status item + open popover — see `AX/MenuBarApp.swift` for the
 popover's key-status-dependent attachment quirk), `click` (element_index OR x/y,
 with a pointer move before the press unless `hover: false`), `hover` (park the
 pointer on an element or point without clicking, so hover-only UI renders for
-the next capture), `press_key`, `type_text`,
-`scroll`, `set_value`, `drag`, `perform_secondary_action`, `select_text`, plus
-`ping`/`echo`. Every action takes optional `background` (per-request override of the
+the next capture), `press_key` (`repeat` sends the chord up to `maxKeyRepeat`
+times in one call — a chord cannot express repetition), `type_text`
+(`element_index` focuses that field first and fails if it will not take focus,
+instead of typing into whatever had focus),
+`scroll` (foreground only — see the gotchas), `set_value` (read-back verified), `drag`,
+`perform_secondary_action`, `select_text`, plus `ping`/`echo`. Every action takes optional `background` (per-request override of the
 daemon default; `false` activates the app first). Pixel path: `list_displays`, `screenshot` (whole
 display, default 1 px/pt, `max_dimension` cap, cursor shown), `zoom` (native
 crop of a region of the latest screenshot — or of an app's latest window

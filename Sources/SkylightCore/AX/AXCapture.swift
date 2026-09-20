@@ -92,13 +92,20 @@ public func shouldReapplyEnablement(previouslyHadWebArea: Bool, currentHasWebAre
     previouslyHadWebArea && !currentHasWebArea
 }
 
-/// Window-aware diff gate: diff only against a baseline from the SAME window.
+/// Window- and scope-aware diff gate: diff only against a baseline captured
+/// from the SAME window and the SAME subtree.
+///
 /// When either window id is unknown (private bridge unavailable) fall back to
 /// the original per-app behavior — better an occasional cross-window diff on
-/// bridge-less machines than never diffing at all there.
+/// bridge-less machines than never diffing at all there. Scope is always known
+/// (it is the request's own `root_element_index`), and a mismatch must force a
+/// full tree: diffing a pane against a whole-window baseline would report every
+/// node outside the pane as removed.
 public func canDiff(disableDiff: Bool, hasPrevious: Bool,
-                    previousWindowID: Int?, currentWindowID: Int?) -> Bool {
+                    previousWindowID: Int?, currentWindowID: Int?,
+                    previousScope: Int? = nil, currentScope: Int? = nil) -> Bool {
     guard !disableDiff, hasPrevious else { return false }
+    guard previousScope == currentScope else { return false }
     guard let prev = previousWindowID, let cur = currentWindowID else { return true }
     return prev == cur
 }
@@ -110,15 +117,18 @@ public struct CaptureResult {
     public let geometry: CaptureGeometry
     public let windowID: Int?
     public let diffed: Bool
+    /// `root_element_index` this capture was scoped to, nil for a whole window.
+    public let scope: Int?
 
     public init(text: String, lines: [TreeLine], window: AXUIElement,
-                geometry: CaptureGeometry, windowID: Int?, diffed: Bool) {
+                geometry: CaptureGeometry, windowID: Int?, diffed: Bool, scope: Int? = nil) {
         self.text = text
         self.lines = lines
         self.window = window
         self.geometry = geometry
         self.windowID = windowID
         self.diffed = diffed
+        self.scope = scope
     }
 }
 
@@ -128,6 +138,8 @@ final class AppCaptureState {
     let map = ElementIndexMap()
     var previousLines: [TreeLine]?
     var previousWindowID: Int?
+    /// Scope of the committed baseline (`root_element_index`, nil = whole window).
+    var previousScope: Int?
     var latestGeometry: CaptureGeometry?
     var enablementDone = false
     /// Whether this app has ever published web content, so a later capture that
@@ -241,8 +253,13 @@ public final class AXCapture {
     /// monotonic, so that is safe regardless of response delivery.)
     /// `caps` overrides the serializer's depth/node budget for this capture
     /// only (get_app_state's `max_depth`/`max_nodes`); nil keeps the defaults.
+    /// `rootIndex` scopes the walk to one element's subtree (get_app_state's
+    /// `root_element_index`): the pane the caller is working in, instead of a
+    /// whole Electron window whose other webviews churn on their own. The
+    /// window, its geometry and its screenshot are unchanged — only the tree is
+    /// narrowed — so click coordinates mean the same thing as ever.
     public func capture(app: NSRunningApplication, windowID: Int? = nil, disableDiff: Bool,
-                        caps overrideCaps: TreeCaps? = nil) throws -> CaptureResult {
+                        caps overrideCaps: TreeCaps? = nil, rootIndex: Int? = nil) throws -> CaptureResult {
         guard Permissions.status().accessibility else {
             let instructions = Permissions.instructions(
                 for: PermissionStatus(accessibility: false, screen_recording: true))
@@ -283,15 +300,22 @@ public final class AXCapture {
         // item AND the popover — the popover is a detached AX subtree, so a
         // single-element root would show one or the other, never both.
         let window = target.surface
-        let root: any TreeNode
+        var root: any TreeNode
         switch target {
         case .window(let w): root = LiveAXNode(element: w)
         case .menuBar(let t): root = MenuBarAppRoot(appElement: appElement, target: t)
         }
+        // Resolved against the PREVIOUS capture's index set, before this walk
+        // reassigns it — the caller picked the index off the tree we last sent.
+        if let rootIndex {
+            root = LiveAXNode(element: try element(forIndex: rootIndex, appPid: pid))
+        }
         let currentWindowID = axWindowID(of: window).map { Int($0) }
         let geometry = try captureGeometry(for: window)
         let caps = overrideCaps ?? self.caps
-        var serialized = AXTreeSerializer(caps: caps).serialize(root: root, map: s.map)
+        let scoped = rootIndex != nil
+        var serialized = AXTreeSerializer(caps: caps).serialize(root: root, map: s.map,
+                                                                preservingPreviousCapture: scoped)
         // Right after enablement Chromium can take a while (>1s cold, verified
         // live) to publish its web content, leaving the first walk without an
         // AXWebArea. Poll with a bounded budget — only on the enablement
@@ -304,7 +328,8 @@ public final class AXCapture {
             while needsWebAreaRetry(enablementJustApplied: true, lines: serialized.lines),
                   Date() < deadline {
                 usleep(500_000)
-                serialized = AXTreeSerializer(caps: caps).serialize(root: root, map: s.map)
+                serialized = AXTreeSerializer(caps: caps).serialize(root: root, map: s.map,
+                                                                    preservingPreviousCapture: scoped)
             }
         } else if shouldReapplyEnablement(previouslyHadWebArea: s.hadWebArea,
                                           currentHasWebArea: hasWebArea(serialized.lines)) {
@@ -314,7 +339,8 @@ public final class AXCapture {
             AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
             AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
             usleep(300_000)
-            serialized = AXTreeSerializer(caps: caps).serialize(root: root, map: s.map)
+            serialized = AXTreeSerializer(caps: caps).serialize(root: root, map: s.map,
+                                                                preservingPreviousCapture: scoped)
         }
         if hasWebArea(serialized.lines) { s.hadWebArea = true }
 
@@ -323,7 +349,8 @@ public final class AXCapture {
         let outputText: String
         let diffed: Bool
         if canDiff(disableDiff: disableDiff, hasPrevious: s.previousLines != nil,
-                   previousWindowID: s.previousWindowID, currentWindowID: currentWindowID),
+                   previousWindowID: s.previousWindowID, currentWindowID: currentWindowID,
+                   previousScope: s.previousScope, currentScope: rootIndex),
            let previous = s.previousLines {
             outputText = diffTrees(previous: previous, current: serialized.lines)
             diffed = true
@@ -333,7 +360,8 @@ public final class AXCapture {
         }
 
         return CaptureResult(text: outputText, lines: serialized.lines, window: window,
-                             geometry: geometry, windowID: currentWindowID, diffed: diffed)
+                             geometry: geometry, windowID: currentWindowID, diffed: diffed,
+                             scope: rootIndex)
     }
 
     /// One entry per AX window of the app, with the wire-facing WindowInfo and
@@ -377,6 +405,7 @@ public final class AXCapture {
         let s = state(for: pid)
         s.previousLines = result.lines
         s.previousWindowID = result.windowID
+        s.previousScope = result.scope
         s.latestGeometry = result.geometry
     }
 

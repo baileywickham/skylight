@@ -141,7 +141,8 @@ router.register("get_app_state", handle("get_app_state", GetAppStateInput.self) 
     let captured = try axCapture.capture(app: app, windowID: input.window_id,
                                          disableDiff: input.disableDiff ?? false,
                                          caps: TreeCaps.standard.overridden(maxDepth: input.max_depth,
-                                                                            maxNodes: input.max_nodes))
+                                                                            maxNodes: input.max_nodes),
+                                         rootIndex: input.root_element_index)
     // AX-only fallback: a failed screenshot (Screen Recording ungranted or
     // lapsed — macOS 15 re-prompts periodically — or a transient SCK error)
     // degrades the response instead of failing it; the model still gets the

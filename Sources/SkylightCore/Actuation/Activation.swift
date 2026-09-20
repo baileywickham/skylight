@@ -121,6 +121,23 @@ public func needsUserActivationPrimer(bundleID: String?) -> Bool {
     return chromiumMarkers.contains { bundleID.contains($0) }
 }
 
+/// Whether a background COORDINATE click or drag will actually reach this app.
+///
+/// The window-stamped NSEvent construction in `BackgroundMouse` lands in the
+/// Chromium family (Chrome, Electron shells like the Claude app, VS Code,
+/// Slack). AppKit apps ignore it: verified live on macOS 27 against TextEdit —
+/// plain CGEvent, the window-stamped event, and the Command-modifier
+/// click-through variant all did nothing, while the identical foreground click
+/// landed instantly. So for anything else a coordinate action in background
+/// mode is refused rather than posted into the void; `element_index` actions
+/// are unaffected (an AX press needs no focus and works everywhere).
+///
+/// Safari is WebKit, not Chromium, and is untested here — it is treated as
+/// not landing, which costs one `background: false`.
+public func backgroundPointerReaches(bundleID: String?) -> Bool {
+    needsUserActivationPrimer(bundleID: bundleID)
+}
+
 /// A point guaranteed to be outside every window, so the primer gesture cannot
 /// activate anything it lands on.
 public let userActivationPrimerPoint = CGPoint(x: -1, y: -1)

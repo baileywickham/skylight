@@ -83,4 +83,36 @@ final class DiffTests: XCTestCase {
         XCTAssertEqual(diffLines.count, 1, "one changed node yields exactly one diff line")
         XCTAssertEqual(diffLines[0], "~ [0] AXTextField value=\"x + [9] AXButton - [7] y\"")
     }
+
+    // MARK: - scope-aware diff gate (get_app_state root_element_index)
+
+    func testDiffIsAllowedWhenScopeIsUnchanged() {
+        XCTAssertTrue(canDiff(disableDiff: false, hasPrevious: true,
+                              previousWindowID: 7, currentWindowID: 7,
+                              previousScope: 42, currentScope: 42))
+        XCTAssertTrue(canDiff(disableDiff: false, hasPrevious: true,
+                              previousWindowID: 7, currentWindowID: 7,
+                              previousScope: nil, currentScope: nil))
+    }
+
+    func testScopeChangeForcesAFullTree() {
+        // Diffing a pane against a whole-window baseline would report every
+        // node outside the pane as removed, and the reverse would report the
+        // whole window as added.
+        XCTAssertFalse(canDiff(disableDiff: false, hasPrevious: true,
+                               previousWindowID: 7, currentWindowID: 7,
+                               previousScope: nil, currentScope: 42))
+        XCTAssertFalse(canDiff(disableDiff: false, hasPrevious: true,
+                               previousWindowID: 7, currentWindowID: 7,
+                               previousScope: 42, currentScope: nil))
+        XCTAssertFalse(canDiff(disableDiff: false, hasPrevious: true,
+                               previousWindowID: 7, currentWindowID: 7,
+                               previousScope: 42, currentScope: 43))
+    }
+
+    func testWindowGateStillAppliesWithinTheSameScope() {
+        XCTAssertFalse(canDiff(disableDiff: false, hasPrevious: true,
+                               previousWindowID: 7, currentWindowID: 8,
+                               previousScope: 42, currentScope: 42))
+    }
 }

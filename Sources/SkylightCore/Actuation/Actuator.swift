@@ -56,6 +56,39 @@ public func hoverSettleMs(_ requested: Int?) -> Int {
 /// the button that the same move just created.
 public let preClickHoverSettleMs = 150
 
+/// Upper bound on `press_key`'s repeat. High enough for "delete this line",
+/// low enough that a typo cannot hold a key down for minutes.
+public let maxKeyRepeat = 200
+
+/// How many times `press_key` sends its chord: 1 by default, never more than
+/// `maxKeyRepeat`, never less than 1 (0 or a negative repeat is a caller
+/// mistake, and silently doing nothing would look like a delivery failure).
+public func keyRepeatCount(_ requested: Int?) -> Int {
+    min(max(requested ?? 1, 1), maxKeyRepeat)
+}
+
+/// Whether a `set_value` write took, given the value before the write and the
+/// value read back after it.
+///
+/// AX returns success for a set the app then discards — a controlled React
+/// input re-renders from its own state and the old text is back a frame later
+/// (verified live in Chromium: the setter returns .success either way). So the
+/// write is judged by what the element says afterwards, not by the return code:
+///
+/// - reads back as what we asked: applied.
+/// - reads back as something else: the app took the write and normalized it
+///   (trimmed, reformatted, clamped a slider). Still applied — refusing here
+///   would fail every field with an input mask.
+/// - exposes no readable value at all (a secure field, a custom element): not
+///   observable, so not something to fail on. Unverifiable is not the same as
+///   wrong, and inventing a failure here would break writes that do land.
+/// - unchanged, and not what we asked: the app threw the write away.
+public func valueWriteLanded(before: String?, after: String?, expected: String) -> Bool {
+    if after == expected { return true }
+    guard let after else { return true }
+    return after != before
+}
+
 
 /// Performs the API's actions against live apps. NOT thread-safe (it shares
 /// AXCapture's per-app index map): all calls must stay on the daemon's global
@@ -73,6 +106,10 @@ public final class Actuator {
     private let approvals: Approvals
     /// Latest `screenshot` geometry per display, for click/drag with display_id.
     private let displayGeometry: DisplayGeometryStore
+    /// How long to wait for an AX focus or value write to show up in the tree.
+    /// Web content applies both asynchronously — measured at ~300ms for a
+    /// Chromium text field, so this leaves headroom without stalling a call.
+    private let focusSettleSeconds: TimeInterval = 1.0
 
     public init(registry: AppRegistry, capture: AXCapture,
                 postActionSleepMs: Int = 100, pauseFile: URL = SkylightPaths.pauseFile,
@@ -286,11 +323,13 @@ public final class Actuator {
     /// these go per-pid, so the app sees a pointer the user's real cursor never
     /// followed — which is the whole point: hover-only affordances render
     /// without disturbing anyone.
-    private func postHover(app: NSRunningApplication, point: CGPoint, background: Bool, settleMs: Int) {
+    private func postHover(app: NSRunningApplication, point: CGPoint, background: Bool, settleMs: Int,
+                           window: MouseWindow? = nil) {
         let approach = CGPoint(x: point.x - 1, y: point.y - 1)
         for (p, delta) in [(approach, 0.0), (point, 1.0)] {
-            let event = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
-                                mouseCursorPosition: p, mouseButton: .left)
+            let event = makeMouse(.mouseMoved, at: p, clickCount: 0, window: window, background: background)
+            // Deltas last: they are what an app tracks hover by, and the
+            // NSEvent construction does not carry them.
             event?.setDoubleValueField(.mouseEventDeltaX, value: delta)
             event?.setDoubleValueField(.mouseEventDeltaY, value: delta)
             post(event, pid: app.processIdentifier, background: background)
@@ -316,6 +355,61 @@ public final class Actuator {
         return CGPoint(x: frame.midX, y: frame.midY)
     }
 
+    /// Refuses a background coordinate action the target app will not act on,
+    /// instead of posting an event that is swallowed and reporting success —
+    /// the silent no-op this whole path exists to end.
+    private func requireBackgroundPointerReaches(_ app: NSRunningApplication, background: Bool,
+                                                 action: String) throws {
+        guard background, !backgroundPointerReaches(bundleID: app.bundleIdentifier) else { return }
+        throw SkyServiceError(
+            code: .backgroundUnavailable,
+            message: "\(action): macOS does not deliver a background coordinate \(action) to "
+                + "'\(app.localizedName ?? "this app")' (only Chromium-family apps accept one). "
+                + "Click by element_index instead — an AX press needs no focus — or retry with background: false.")
+    }
+
+    /// What a background mouse event needs to name its target window. nil when
+    /// the window cannot be identified (no window, or the private window-id
+    /// bridge is unavailable), which drops event construction back to a plain
+    /// CGEvent.
+    struct MouseWindow {
+        let id: CGWindowID
+        let frame: CGRect
+    }
+
+    private func mouseWindow(_ window: AXUIElement?) -> MouseWindow? {
+        guard let window, let id = axWindowID(of: window), let frame = axFrame(of: window) else { return nil }
+        return MouseWindow(id: id, frame: frame)
+    }
+
+    /// Builds a mouse event for `point`.
+    ///
+    /// In background mode, against a window we can name, a BUTTON event gets
+    /// the NSEvent-derived, window-stamped construction that a backgrounded app
+    /// will actually act on (see `BackgroundMouse` — a plain CGEvent posted
+    /// per-pid is delivered and then ignored). Foreground, or when the window
+    /// is unknown, it is the plain CGEvent that has always been posted: in the
+    /// foreground the event goes through the session tap and the window server
+    /// resolves the window itself.
+    ///
+    /// Mouse MOVES deliberately stay plain, even in the background: they were
+    /// never the broken case, and the NSEvent construction actively breaks them
+    /// — verified live, an NSEvent-built move does not register as a hover in
+    /// Chromium, which takes `hover` (and every hover-only control it reaches)
+    /// with it.
+    private func makeMouse(_ type: CGEventType, at point: CGPoint, button: CGMouseButton = .left,
+                           clickCount: Int = 1, window: MouseWindow?, background: Bool) -> CGEvent? {
+        if background, BackgroundMouse.isButtonEvent(type), let window,
+           let event = BackgroundMouse.event(type: type, global: point, windowID: window.id,
+                                             windowFrame: window.frame, button: button,
+                                             clickCount: clickCount) {
+            return event
+        }
+        let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: button)
+        event?.setIntegerValueField(.mouseEventClickState, value: Int64(max(clickCount, 1)))
+        return event
+    }
+
     /// Delivers a synthetic event. Foreground: session HID tap (frontmost
     /// app). Background: CGEventPostToPid into `pid`'s event queue, so the
     /// event reaches the target even while another app holds focus (menu
@@ -325,6 +419,39 @@ public final class Actuator {
         case .session: event?.post(tap: .cghidEventTap)
         case .pid(let pid): event?.postToPid(pid)
         }
+    }
+
+    /// Makes `element` the app's focused element, so the keystrokes that follow
+    /// land in it and nowhere else.
+    ///
+    /// The setter's return code proves nothing: Chromium reports success and
+    /// applies the focus a frame later, and an element that refuses focus
+    /// entirely reports success too. So poll the app's focused element until it
+    /// is the one we asked for, and fail if it never becomes that.
+    private func focusElement(_ element: AXUIElement, app: NSRunningApplication, action: String) throws {
+        let err = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        guard err == .success else { throw mapAXError(err, action: "\(action): focus") }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        let deadline = Date().addingTimeInterval(focusSettleSeconds)
+        repeat {
+            if let focused: AXUIElement = axAttribute(appElement, kAXFocusedUIElementAttribute as String),
+               CFEqual(focused, element) {
+                return
+            }
+            usleep(25_000)
+        } while Date() < deadline
+        throw SkyServiceError(
+            code: .elementNotActionable,
+            message: "\(action): element never took focus — click it first, or omit element_index to type into whatever is focused")
+    }
+
+    /// The element's AX value as the tree renders it, so a read-back compares
+    /// like with like (a checkbox's value is a number, a field's is a string).
+    private func valueString(of element: AXUIElement) -> String? {
+        let raw: CFTypeRef? = axAttribute(element, kAXValueAttribute as String)
+        if let s = raw as? String { return s }
+        if let n = raw as? NSNumber { return n.stringValue }
+        return nil
     }
 
     /// Keyboard actions: the named app's raised window, or — with no app —
@@ -357,10 +484,12 @@ public final class Actuator {
         } else if let x = input.x, let y = input.y {
             let app: NSRunningApplication
             let point: CGPoint
+            let windowElement: AXUIElement?
             if let displayID = input.display_id {
                 point = try displayPoint(x: x, y: y, displayID: displayID)
                 let resolved = try displayTarget(input.app, at: point)
                 app = resolved.app
+                windowElement = resolved.window
                 prepareTarget(app: app, window: resolved.window, background: background, action: .coordinateClick)
             } else {
                 guard let appIdentifier = input.app else {
@@ -369,24 +498,34 @@ public final class Actuator {
                 }
                 let (resolvedApp, window, geometry) = try target(appIdentifier, needsGeometry: true)
                 app = resolvedApp
+                windowElement = window
                 prepareTarget(app: app, window: window, background: background, action: .coordinateClick)
                 point = globalPoint(fromScreenshotX: x, y: y, geometry: geometry!)
             }
+            try requireBackgroundPointerReaches(app, background: background, action: "click")
+            // Which window the press names. A background click is ignored
+            // without it (see BackgroundMouse).
+            let window = mouseWindow(windowElement)
             primeUserActivationIfNeeded(app: app, background: background)
             // After the primer (which parks the pointer at (-1,-1)), never
             // before: the primer would otherwise undo the hover.
             if input.hover ?? true {
-                postHover(app: app, point: point, background: background, settleMs: preClickHoverSettleMs)
+                postHover(app: app, point: point, background: background,
+                          settleMs: preClickHoverSettleMs, window: window)
             }
             let (button, down, up, _) = try mouseButton(input.mouse_button)
             let clicks = input.click_count ?? 1
             for i in 1...max(clicks, 1) {
-                let downEvent = CGEvent(mouseEventSource: nil, mouseType: down, mouseCursorPosition: point, mouseButton: button)
-                let upEvent = CGEvent(mouseEventSource: nil, mouseType: up, mouseCursorPosition: point, mouseButton: button)
-                downEvent?.setIntegerValueField(.mouseEventClickState, value: Int64(i))
-                upEvent?.setIntegerValueField(.mouseEventClickState, value: Int64(i))
+                let downEvent = makeMouse(down, at: point, button: button, clickCount: i,
+                                          window: window, background: background)
+                let upEvent = makeMouse(up, at: point, button: button, clickCount: i,
+                                        window: window, background: background)
                 post(downEvent, pid: app.processIdentifier, background: background)
+                // A real click has a press duration; a down and up sharing a
+                // timestamp is not one.
+                usleep(40_000)
                 post(upEvent, pid: app.processIdentifier, background: background)
+                if i < max(clicks, 1) { usleep(60_000) }
             }
         } else {
             throw SkyServiceError(code: .invalidParams, message: "click needs element_index or x+y")
@@ -402,6 +541,7 @@ public final class Actuator {
         let background = effectiveBackground(input.background)
         let app: NSRunningApplication
         let point: CGPoint
+        var hoverWindow: MouseWindow?
         if let index = input.element_index {
             guard let appIdentifier = input.app else {
                 throw SkyServiceError(code: .invalidParams, message: "hover by element_index needs app")
@@ -410,12 +550,14 @@ public final class Actuator {
             let element = try capture.element(forIndex: index, appPid: app.processIdentifier)
             let window = try capturedWindow(of: app)
             point = try pointerPoint(element: element, window: window, action: "hover[\(index)]")
+            hoverWindow = mouseWindow(window)
             prepareTarget(app: app, window: window, background: background, action: .hover)
         } else if let x = input.x, let y = input.y {
             if let displayID = input.display_id {
                 point = try displayPoint(x: x, y: y, displayID: displayID)
                 let resolved = try displayTarget(input.app, at: point)
                 app = resolved.app
+                hoverWindow = mouseWindow(resolved.window)
                 prepareTarget(app: app, window: resolved.window, background: background, action: .hover)
             } else {
                 guard let appIdentifier = input.app else {
@@ -424,6 +566,7 @@ public final class Actuator {
                 }
                 let (resolvedApp, window, geometry) = try target(appIdentifier, needsGeometry: true)
                 app = resolvedApp
+                hoverWindow = mouseWindow(window)
                 prepareTarget(app: app, window: window, background: background, action: .hover)
                 point = globalPoint(fromScreenshotX: x, y: y, geometry: geometry!)
             }
@@ -433,7 +576,7 @@ public final class Actuator {
         // Hold the pointer there: hover UI often fades in, and the caller's
         // next get_app_state must see the settled state, not the transition.
         postHover(app: app, point: point, background: background,
-                  settleMs: hoverSettleMs(input.settle_ms))
+                  settleMs: hoverSettleMs(input.settle_ms), window: hoverWindow)
         return ActionResult(done: true)
     }
 
@@ -452,16 +595,23 @@ public final class Actuator {
         // is how real key equivalents are delivered to NSMenu. One shared source
         // keeps the whole sequence in a single event stream.
         let source = CGEventSource(stateID: .hidSystemState)
-        for step in keyEventSequence(for: layoutChord) {
-            let event = CGEvent(keyboardEventSource: source, virtualKey: step.keyCode, keyDown: step.keyDown)
-            if isModifierKeyCode(step.keyCode) {
-                // Physical modifiers arrive as flagsChanged, never keyDown/keyUp;
-                // menu-equivalent matching ignores modifier keyDowns.
-                event?.type = .flagsChanged
+        let repeats = keyRepeatCount(input.`repeat`)
+        for _ in 0..<repeats {
+            for step in keyEventSequence(for: layoutChord) {
+                let event = CGEvent(keyboardEventSource: source, virtualKey: step.keyCode, keyDown: step.keyDown)
+                if isModifierKeyCode(step.keyCode) {
+                    // Physical modifiers arrive as flagsChanged, never keyDown/keyUp;
+                    // menu-equivalent matching ignores modifier keyDowns.
+                    event?.type = .flagsChanged
+                }
+                event?.flags = step.flags
+                post(event, pid: app.processIdentifier, background: background)
+                usleep(5_000) // real chords have inter-key spacing; keeps order stable
             }
-            event?.flags = step.flags
-            post(event, pid: app.processIdentifier, background: background)
-            usleep(5_000) // real chords have inter-key spacing; keeps order stable
+            // Gap between repeats, so the app sees separate presses rather than
+            // one smeared chord — a text field that coalesces them would delete
+            // one character for twenty BackSpaces.
+            if repeats > 1 { usleep(15_000) }
         }
         postActionSleep()
         return ActionResult(done: true)
@@ -470,8 +620,25 @@ public final class Actuator {
     public func typeText(_ input: TypeTextInput) throws -> ActionResult {
         try guardNotPaused()
         let background = effectiveBackground(input.background)
-        let (app, window) = try keyboardTarget(input.app)
+        let app: NSRunningApplication
+        let window: AXUIElement?
+        var focusTarget: AXUIElement?
+        if let index = input.element_index {
+            guard let appIdentifier = input.app else {
+                throw SkyServiceError(code: .invalidParams, message: "type_text by element_index needs app")
+            }
+            app = try resolveApproved(appIdentifier)
+            focusTarget = try capture.element(forIndex: index, appPid: app.processIdentifier)
+            window = try? capture.focusedWindow(of: app)
+        } else {
+            (app, window) = try keyboardTarget(input.app)
+        }
         prepareTarget(app: app, window: window, background: background, action: .typeText)
+        // After prepareTarget: in foreground mode the activation moves focus
+        // around, so focusing the element first would be undone by the raise.
+        if let focusTarget, let index = input.element_index {
+            try focusElement(focusTarget, app: app, action: "type_text[\(index)]")
+        }
         // Unicode key events into current focus, ~20 UTF-16 units per event
         // (surrogate pairs are never split across events; see utf16Chunks).
         for chunk in utf16Chunks(input.text) {
@@ -500,6 +667,19 @@ public final class Actuator {
         default: throw SkyServiceError(code: .invalidParams, message: "direction must be up|down|left|right")
         }
         let app = try resolveApproved(input.app)
+        // Scroll wheels have no NSEvent constructor, so the window-stamped
+        // construction that rescued background clicks cannot be built for them.
+        // Verified live on macOS 27 in both engines: a wheel posted per-pid
+        // scrolls neither a Chromium page nor an AppKit scroll view, while the
+        // same scroll in the foreground works.
+        if background {
+            throw SkyServiceError(
+                code: .backgroundUnavailable,
+                message: "scroll: a scroll wheel cannot be delivered in the background — wheel "
+                    + "events cannot carry the window stamp that makes a background click land "
+                    + "(verified against Chromium on macOS 27). Retry with background: false, "
+                    + "which activates the app first.")
+        }
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
         prepareTarget(app: app, window: window, background: background, action: .scroll)
@@ -534,9 +714,24 @@ public final class Actuator {
         let element = try capture.element(forIndex: input.element_index, appPid: app.processIdentifier)
         let window = try capture.focusedWindow(of: app)
         prepareTarget(app: app, window: window, background: background, action: .setValue)
+        let before = valueString(of: element)
         let err = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, input.value as CFString)
         guard err == .success else { throw mapAXError(err, action: "set_value[\(input.element_index)]") }
         postActionSleep()
+        // Read it back: AX success does not mean the app kept the write.
+        let deadline = Date().addingTimeInterval(focusSettleSeconds)
+        var after = valueString(of: element)
+        while !valueWriteLanded(before: before, after: after, expected: input.value), Date() < deadline {
+            usleep(25_000)
+            after = valueString(of: element)
+        }
+        guard valueWriteLanded(before: before, after: after, expected: input.value) else {
+            throw SkyServiceError(
+                code: .elementNotActionable,
+                message: "set_value[\(input.element_index)]: the app accepted the write and kept its old value "
+                    + "\"\(after ?? "")\" — it is driving this field from its own state (a controlled web input). "
+                    + "Click or focus the field and use type_text instead.")
+        }
         return ActionResult(done: true)
     }
 
@@ -547,11 +742,13 @@ public final class Actuator {
         let app: NSRunningApplication
         let from: CGPoint
         let to: CGPoint
+        let windowElement: AXUIElement?
         if let displayID = input.display_id {
             from = try displayPoint(x: input.from_x, y: input.from_y, displayID: displayID)
             to = try displayPoint(x: input.to_x, y: input.to_y, displayID: displayID)
             let resolved = try displayTarget(input.app, at: from)
             app = resolved.app
+            windowElement = resolved.window
             prepareTarget(app: app, window: resolved.window, background: background, action: .drag)
         } else {
             guard let appIdentifier = input.app else {
@@ -560,21 +757,24 @@ public final class Actuator {
             }
             let (resolvedApp, window, geometry) = try target(appIdentifier, needsGeometry: true)
             app = resolvedApp
+            windowElement = window
             prepareTarget(app: app, window: window, background: background, action: .drag)
             from = globalPoint(fromScreenshotX: input.from_x, y: input.from_y, geometry: geometry!)
             to = globalPoint(fromScreenshotX: input.to_x, y: input.to_y, geometry: geometry!)
         }
-        post(CGEvent(mouseEventSource: nil, mouseType: down, mouseCursorPosition: from, mouseButton: button),
+        try requireBackgroundPointerReaches(app, background: background, action: "drag")
+        let window = mouseWindow(windowElement)
+        post(makeMouse(down, at: from, button: button, window: window, background: background),
              pid: app.processIdentifier, background: background)
         let steps = 12
         for step in 1...steps {
             let t = Double(step) / Double(steps)
             let mid = CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t)
-            post(CGEvent(mouseEventSource: nil, mouseType: dragged, mouseCursorPosition: mid, mouseButton: button),
+            post(makeMouse(dragged, at: mid, button: button, window: window, background: background),
                  pid: app.processIdentifier, background: background)
             usleep(15_000)
         }
-        post(CGEvent(mouseEventSource: nil, mouseType: up, mouseCursorPosition: to, mouseButton: button),
+        post(makeMouse(up, at: to, button: button, window: window, background: background),
              pid: app.processIdentifier, background: background)
         postActionSleep()
         return ActionResult(done: true)

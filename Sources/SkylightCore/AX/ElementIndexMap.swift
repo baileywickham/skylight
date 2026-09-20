@@ -25,8 +25,16 @@ public final class ElementIndexMap {
         identityByIndex[index]
     }
 
-    public func beginCapture() {
-        latestCapture.removeAll()
+    /// Starts a capture's "seen this time" set.
+    ///
+    /// `preservingPrevious` keeps the previous set instead of clearing it, for
+    /// a capture that deliberately walked only part of the window
+    /// (get_app_state's `root_element_index`). Staleness means "this element
+    /// was gone when we looked"; a scoped capture never looked outside its
+    /// subtree, so it has no evidence either way and must not invalidate
+    /// indices the caller can still act on.
+    public func beginCapture(preservingPrevious: Bool = false) {
+        if !preservingPrevious { latestCapture.removeAll() }
     }
 
     public func noteCaptured(_ index: Int) {

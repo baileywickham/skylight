@@ -33,16 +33,23 @@ public struct SkyLightCapabilities: Codable, Equatable {
     /// The experimental SkyLight event channel is enabled AND resolved.
     /// Opt-in via SKYLIGHT_TRUSTED_EVENTS=1; see SkyLightBridge.trustedEvents.
     public let trusted_events: Bool
+    /// Background mouse BUTTON events can be built at all — the private
+    /// `CGEventSetWindowLocation` resolved (see `BackgroundMouse`). False means
+    /// background `click`/`drag` degrade to a plain CGEvent, which a
+    /// backgrounded app ignores: use `background: false` there.
+    public let background_mouse_events: Bool
     /// Windows can be asked which Space they are on and moved to the active
     /// Space without switching Spaces (`bring_to_active_space`,
     /// `is_on_active_space` in list_windows). False → both degrade: the flag
     /// is absent and the method fails not_implemented.
     public let space_management: Bool
 
-    public init(focus_without_raise: Bool, trusted_events: Bool, space_management: Bool = false) {
+    public init(focus_without_raise: Bool, trusted_events: Bool, space_management: Bool = false,
+                background_mouse_events: Bool = false) {
         self.focus_without_raise = focus_without_raise
         self.trusted_events = trusted_events
         self.space_management = space_management
+        self.background_mouse_events = background_mouse_events
     }
 }
 
@@ -146,7 +153,8 @@ public enum SkyLightBridge {
         SkyLightCapabilities(
             focus_without_raise: canFocusWithoutRaise,
             trusted_events: trustedEventsEnabled && postEventRecordFn != nil,
-            space_management: canManageSpaces)
+            space_management: canManageSpaces,
+            background_mouse_events: BackgroundMouse.isAvailable)
     }
 
     // MARK: - Spaces

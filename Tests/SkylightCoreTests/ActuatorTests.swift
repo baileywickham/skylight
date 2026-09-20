@@ -217,4 +217,58 @@ final class ActuatorTests: XCTestCase {
         XCTAssertEqual(hoverSettleMs(60_000), 5_000)
         XCTAssertEqual(hoverSettleMs(-1), 0)
     }
+
+    // MARK: - press_key repeat (Bailey 2026-09-19: "BackSpace BackSpace" is not a chord)
+
+    func testKeyRepeatDefaultsToOnce() {
+        XCTAssertEqual(keyRepeatCount(nil), 1)
+    }
+
+    func testKeyRepeatIsClampedToASaneRange() {
+        XCTAssertEqual(keyRepeatCount(20), 20)
+        XCTAssertEqual(keyRepeatCount(maxKeyRepeat + 5_000), maxKeyRepeat,
+                       "a typo must not hold a key down for minutes")
+        // 0 or negative is a caller mistake; doing nothing would be
+        // indistinguishable from a delivery failure, so it still presses once.
+        XCTAssertEqual(keyRepeatCount(0), 1)
+        XCTAssertEqual(keyRepeatCount(-3), 1)
+    }
+
+    // MARK: - set_value read-back (Bailey 2026-09-19: silent no-op on controlled inputs)
+
+    func testValueWriteLandedWhenTheFieldReadsBackWhatWeAsked() {
+        XCTAssertTrue(valueWriteLanded(before: "old", after: "new", expected: "new"))
+    }
+
+    func testValueWriteRejectedWhenTheFieldKeepsItsOldValue() {
+        // The React-controlled case: AX returns .success, the app re-renders
+        // from its own state, the field never changed.
+        XCTAssertFalse(valueWriteLanded(before: "locked", after: "locked", expected: "SHOULD-NOT-STICK"))
+    }
+
+    func testValueWriteAcceptedWhenTheAppNormalizesIt() {
+        // Trimmed, reformatted, clamped: the app took the write and made it its
+        // own. Failing here would break every field with an input mask.
+        XCTAssertTrue(valueWriteLanded(before: "", after: "(415) 555-1234", expected: "4155551234"))
+        XCTAssertTrue(valueWriteLanded(before: "0", after: "100", expected: "9999"))
+    }
+
+    func testValueWriteLandedWhenTheFieldAlreadyHeldThatValue() {
+        // Nothing to change, and the field says what was asked: not a failure.
+        XCTAssertTrue(valueWriteLanded(before: "same", after: "same", expected: "same"))
+    }
+
+    func testValueWriteIsNotFailedWhenTheElementExposesNoValue() {
+        // A secure field or a custom element publishes no readable AXValue, so
+        // the write is unobservable — which is not evidence that it failed.
+        XCTAssertTrue(valueWriteLanded(before: nil, after: nil, expected: "x"))
+        XCTAssertTrue(valueWriteLanded(before: "old", after: nil, expected: "x"))
+    }
+
+    // MARK: - type_text targeting (Bailey 2026-09-19: text landing in the wrong field)
+
+    func testTypeTextByElementIndexRequiresAnApp() throws {
+        let actuator = try makeActuator()
+        assertThrowsCode(.invalidParams, try actuator.typeText(TypeTextInput(text: "x", element_index: 4)))
+    }
 }

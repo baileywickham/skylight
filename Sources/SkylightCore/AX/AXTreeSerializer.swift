@@ -51,8 +51,9 @@ public final class AXTreeSerializer {
         self.caps = caps
     }
 
-    public func serialize(root: any TreeNode, map: ElementIndexMap) -> SerializedTree {
-        map.beginCapture()
+    public func serialize(root: any TreeNode, map: ElementIndexMap,
+                          preservingPreviousCapture: Bool = false) -> SerializedTree {
+        map.beginCapture(preservingPrevious: preservingPreviousCapture)
         var lines: [TreeLine] = []
         var nodeBudget = caps.maxNodes
         walk(root, depth: 0, map: map, lines: &lines, nodeBudget: &nodeBudget)
