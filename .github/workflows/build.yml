@@ -12,7 +12,22 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ts/package.json
       - name: Build
         run: swift build -c release
       - name: Test
         run: swift test
+      # The app ships the TS client compiled, so a break in that build is a
+      # broken release. Catch it on push, not at tag time.
+      - name: TS client
+        working-directory: ts
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm test
+          pnpm run build:dist
+          test -f dist/mcp.mjs
