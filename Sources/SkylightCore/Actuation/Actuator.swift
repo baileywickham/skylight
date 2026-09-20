@@ -360,7 +360,9 @@ public final class Actuator {
     /// the silent no-op this whole path exists to end.
     private func requireBackgroundPointerReaches(_ app: NSRunningApplication, background: Bool,
                                                  action: String) throws {
-        guard background, !backgroundPointerReaches(bundleID: app.bundleIdentifier) else { return }
+        guard background,
+              !backgroundPointerReaches(bundleID: app.bundleIdentifier, bundleURL: app.bundleURL)
+        else { return }
         throw SkyServiceError(
             code: .backgroundUnavailable,
             message: "\(action): macOS does not deliver a background coordinate \(action) to "

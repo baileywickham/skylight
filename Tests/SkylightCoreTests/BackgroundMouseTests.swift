@@ -47,12 +47,37 @@ final class BackgroundMouseTests: XCTestCase {
                                            windowFrame: window, button: .left, clickCount: 1))
     }
 
-    func testBackgroundPointerReachesOnlyTheChromiumFamily() {
+    func testBackgroundPointerReachesTheChromiumFamilyByBundleID() {
         XCTAssertTrue(backgroundPointerReaches(bundleID: "com.google.Chrome"))
-        XCTAssertTrue(backgroundPointerReaches(bundleID: "com.anthropic.claudefordesktop"),
-                      "Electron shells embed the same renderer")
         XCTAssertFalse(backgroundPointerReaches(bundleID: "com.apple.TextEdit"),
                        "verified live: AppKit ignores the event, foreground lands instantly")
         XCTAssertFalse(backgroundPointerReaches(bundleID: nil))
+    }
+
+    func testElectronAppIsRecognizedByItsFrameworksNotItsBundleID() throws {
+        // The Claude desktop app is Electron and its id says nothing about it
+        // (com.anthropic.claudefordesktop) — the case that made bundle-id
+        // matching alone wrong, and the app this matters most for.
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("skylight-bundle-\(UUID().uuidString)")
+        let frameworks = root.appendingPathComponent("Contents/Frameworks/Electron Framework.framework")
+        try FileManager.default.createDirectory(at: frameworks, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        XCTAssertFalse(backgroundPointerReaches(bundleID: "com.anthropic.claudefordesktop"),
+                       "the id alone gives nothing away")
+        XCTAssertTrue(backgroundPointerReaches(bundleID: "com.anthropic.claudefordesktop", bundleURL: root))
+        XCTAssertTrue(embedsChromium(bundleURL: root))
+    }
+
+    func testAnAppWithNoFrameworksIsNotChromium() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("skylight-bundle-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("Contents/Frameworks/Mantle.framework"),
+            withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        XCTAssertFalse(embedsChromium(bundleURL: root))
+        XCTAssertFalse(embedsChromium(bundleURL: nil))
     }
 }

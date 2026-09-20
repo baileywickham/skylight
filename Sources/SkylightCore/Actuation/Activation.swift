@@ -121,6 +121,27 @@ public func needsUserActivationPrimer(bundleID: String?) -> Bool {
     return chromiumMarkers.contains { bundleID.contains($0) }
 }
 
+/// Whether an app embeds the Chromium renderer, by looking for it on disk.
+///
+/// Bundle identifiers are not a reliable test for this: the Claude desktop app
+/// is Electron and its id (`com.anthropic.claudefordesktop`) says nothing about
+/// that, which is exactly the app this matters most for. Every Chromium or
+/// Electron app ships the renderer as a framework inside its own bundle, so ask
+/// the bundle instead of guessing from a name.
+public func embedsChromium(bundleURL: URL?) -> Bool {
+    guard let bundleURL else { return false }
+    let frameworks = bundleURL.appendingPathComponent("Contents/Frameworks")
+    guard let names = try? FileManager.default.contentsOfDirectory(atPath: frameworks.path) else { return false }
+    return names.contains { name in
+        let lowered = name.lowercased()
+        guard lowered.hasSuffix(".framework") else { return false }
+        // "Electron Framework", "Google Chrome Framework", "Microsoft Edge
+        // Framework", "Brave Browser Framework", "Chromium Embedded Framework".
+        return ["electron", "chromium", "chrome", "edge", "brave", "cef"]
+            .contains { lowered.contains($0) }
+    }
+}
+
 /// Whether a background COORDINATE click or drag will actually reach this app.
 ///
 /// The window-stamped NSEvent construction in `BackgroundMouse` lands in the
@@ -134,8 +155,12 @@ public func needsUserActivationPrimer(bundleID: String?) -> Bool {
 ///
 /// Safari is WebKit, not Chromium, and is untested here — it is treated as
 /// not landing, which costs one `background: false`.
-public func backgroundPointerReaches(bundleID: String?) -> Bool {
-    needsUserActivationPrimer(bundleID: bundleID)
+///
+/// Both signals are used: the bundle id for the browsers already named in
+/// `needsUserActivationPrimer`, and the bundle's own frameworks for everything
+/// else, since an Electron app's id gives nothing away.
+public func backgroundPointerReaches(bundleID: String?, bundleURL: URL? = nil) -> Bool {
+    needsUserActivationPrimer(bundleID: bundleID) || embedsChromium(bundleURL: bundleURL)
 }
 
 /// A point guaranteed to be outside every window, so the primer gesture cannot
