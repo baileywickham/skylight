@@ -39,11 +39,17 @@ input{font:16px system-ui;padding:6px;width:320px}</style>
 </section>
 <!-- Fills the rest of the viewport, so a click aimed at the middle of the
      window lands inside it without the check having to know page geometry. -->
-<div id="target" aria-label="click target" style="height:70vh;background:#eef;border:1px solid #88a">clicks: 0</div>
+<div id="target" aria-label="click target" style="height:150vh;background:#eef;border:1px solid #88a">clicks: 0</div>
+<div id="where" aria-label="click position" style="position:fixed;top:0;right:0;background:#000;color:#0f0;font:13px monospace;padding:4px">no click</div>
 <script>
 let clicks = 0;
-document.getElementById("target").addEventListener("click", () => {
+document.getElementById("target").addEventListener("click", (e) => {
   document.getElementById("target").textContent = "clicks: " + (++clicks);
+  // WHERE it landed, not just that it landed: a coordinate bug that mirrors
+  // the click about the window's midline still increments a counter on a
+  // full-height target, and that is exactly how v0.3.7 shipped broken.
+  document.getElementById("where").textContent =
+    "clientY=" + Math.round(e.clientY) + " innerH=" + window.innerHeight;
 });
 </script>
 <section aria-label="Noisy pane"><div id="tick" aria-label="ticker">tick 0</div></section>
@@ -130,14 +136,29 @@ const frontBefore = frontmost();
 const shot = (await sky.get_app_state({ app, disableDiff: true, include_data_url: false })).screenshot;
 if (shot == null) throw new Error("no screenshot: coordinate clicks need capture geometry");
 const before = lineFor(await full(), /clicks: \d+/) ?? "";
-// Aim at the middle of the page, not near an element's edge: a few pixels
-// past the target reads as "the click did not land".
-await sky.click({ app, x: shot.width / 2, y: shot.height * 0.6 });
-const after = lineFor(await full(), /clicks: \d+/) ?? "";
+// Above the window's midline but below the fields at the top of the page: a
+// mirrored click then lands ~150pt away, far outside the tolerance below,
+// instead of passing by accident on a tall target.
+const aimY = shot.height * 0.45;
+await sky.click({ app, x: shot.width / 2, y: aimY });
+const afterTree = await full();
+const after = lineFor(afterTree, /clicks: \d+/) ?? "";
 const frontAfter = frontmost();
 check("background coordinate click lands",
   before !== after && /clicks: [1-9]/.test(after),
   `${before.trim() || "(none)"} -> ${after.trim() || "(none)"}`);
+
+// Where it landed. The page reports clientY; convert the aim point to the same
+// space via the viewport height, and allow for browser chrome above it.
+const where = lineFor(afterTree, /clientY=/) ?? "";
+const landed = Number(where.match(/clientY=(-?\d+)/)?.[1] ?? NaN);
+const innerH = Number(where.match(/innerH=(\d+)/)?.[1] ?? NaN);
+const scale = shot.scale ?? 2;
+const chromeHeight = shot.height / scale - innerH;   // toolbar + bookmarks, in points
+const expected = aimY / scale - chromeHeight;
+check("background click lands where it was aimed",
+  Number.isFinite(landed) && Math.abs(landed - expected) <= 12,
+  `expected clientY≈${Math.round(expected)}, got ${landed} (mirrored would be ≈${Math.round(innerH - expected)})`);
 check("background click did not steal focus",
   frontBefore !== app && frontAfter === frontBefore, `${frontBefore} -> ${frontAfter}`);
 

@@ -159,7 +159,7 @@ server.registerTool("get_app_state", {
 }));
 
 server.registerTool("click", {
-  description: "Click. Either element_index (from get_app_state, preferred — an AX press, works without focus in any app), or x/y pixels of the latest get_app_state screenshot of `app`, or x/y pixels of the latest `screenshot` when display_id is given (then app is optional: the app under the point is used). Coordinate clicks in the background only reach Chromium/Electron apps; in other apps they fail background_unavailable, so use element_index or background: false.",
+  description: "Click. Either element_index (from get_app_state, preferred — an AX press, works without focus in any app), or x/y pixels of the latest get_app_state screenshot of `app`, or x/y pixels of the latest `screenshot` when display_id is given (then app is optional: the app under the point is used). Background coordinate clicks work in native and web apps alike where the daemon reports the needed capabilities; otherwise they fail background_unavailable, so use element_index or background: false.",
   inputSchema: {
     app: app.optional(),
     element_index: z.number().int().optional(),
@@ -225,7 +225,7 @@ server.registerTool("set_value", {
 }, (input) => run(async () => text(await sky.set_value(input))));
 
 server.registerTool("drag", {
-  description: "Drag from one point to another. Pixels of the latest get_app_state screenshot of `app`, or of the latest `screenshot` when display_id is given (app then optional). Like click, a background drag only reaches Chromium/Electron apps.",
+  description: "Drag from one point to another. Pixels of the latest get_app_state screenshot of `app`, or of the latest `screenshot` when display_id is given (app then optional). Like click, a background drag needs the daemon's background-pointer capabilities.",
   inputSchema: {
     app: app.optional(),
     from_x: z.number(), from_y: z.number(), to_x: z.number(), to_y: z.number(),

@@ -121,46 +121,27 @@ public func needsUserActivationPrimer(bundleID: String?) -> Bool {
     return chromiumMarkers.contains { bundleID.contains($0) }
 }
 
-/// Whether an app embeds the Chromium renderer, by looking for it on disk.
+/// Whether a background COORDINATE click or drag can be delivered at all.
 ///
-/// Bundle identifiers are not a reliable test for this: the Claude desktop app
-/// is Electron and its id (`com.anthropic.claudefordesktop`) says nothing about
-/// that, which is exactly the app this matters most for. Every Chromium or
-/// Electron app ships the renderer as a framework inside its own bundle, so ask
-/// the bundle instead of guessing from a name.
-public func embedsChromium(bundleURL: URL?) -> Bool {
-    guard let bundleURL else { return false }
-    let frameworks = bundleURL.appendingPathComponent("Contents/Frameworks")
-    guard let names = try? FileManager.default.contentsOfDirectory(atPath: frameworks.path) else { return false }
-    return names.contains { name in
-        let lowered = name.lowercased()
-        guard lowered.hasSuffix(".framework") else { return false }
-        // "Electron Framework", "Google Chrome Framework", "Microsoft Edge
-        // Framework", "Brave Browser Framework", "Chromium Embedded Framework".
-        return ["electron", "chromium", "chrome", "edge", "brave", "cef"]
-            .contains { lowered.contains($0) }
-    }
-}
-
-/// Whether a background COORDINATE click or drag will actually reach this app.
+/// Two private capabilities have to be present, and both were measured rather
+/// than assumed:
 ///
-/// The window-stamped NSEvent construction in `BackgroundMouse` lands in the
-/// Chromium family (Chrome, Electron shells like the Claude app, VS Code,
-/// Slack). AppKit apps ignore it: verified live on macOS 27 against TextEdit —
-/// plain CGEvent, the window-stamped event, and the Command-modifier
-/// click-through variant all did nothing, while the identical foreground click
-/// landed instantly. So for anything else a coordinate action in background
-/// mode is refused rather than posted into the void; `element_index` actions
-/// are unaffected (an AX press needs no focus and works everywhere).
+///   - the window stamp (`BackgroundMouse`), without which the event reaches
+///     the process with no window and no view ever runs;
+///   - `focusWithoutRaise`, without which the target app is not in a state to
+///     act on it. Verified live: a correctly stamped click posted into an
+///     INACTIVE AppKit app does nothing, and the identical click lands — mid
+///     line, in a background TextEdit window, with Finder frontmost — once the
+///     app has been made active without being raised.
 ///
-/// Safari is WebKit, not Chromium, and is untested here — it is treated as
-/// not landing, which costs one `background: false`.
-///
-/// Both signals are used: the bundle id for the browsers already named in
-/// `needsUserActivationPrimer`, and the bundle's own frameworks for everything
-/// else, since an Electron app's id gives nothing away.
-public func backgroundPointerReaches(bundleID: String?, bundleURL: URL? = nil) -> Bool {
-    needsUserActivationPrimer(bundleID: bundleID) || embedsChromium(bundleURL: bundleURL)
+/// This is deliberately about capabilities, not about which app is being
+/// driven: an earlier version of this gate refused everything outside the
+/// Chromium family, which was wrong. That conclusion came from a coordinate bug
+/// (see `windowLocalPoint`) that mirrored clicks about the window's midline, so
+/// a click aimed at TextEdit's first line landed below its last one and looked
+/// like "AppKit ignores these events".
+public func backgroundPointerReaches() -> Bool {
+    BackgroundMouse.isAvailable && SkyLightBridge.canFocusWithoutRaise
 }
 
 /// A point guaranteed to be outside every window, so the primer gesture cannot

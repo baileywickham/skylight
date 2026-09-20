@@ -228,39 +228,43 @@ real executable path, since it runs via a brew-bin symlink.
 - **A node prints its label OR its value, never both** (`fallbackAXLabel`), so a
   labelled field loses its label in the tree the moment it has text in it. Track
   fields by their sticky `element_index`, not by matching the label again.
-- **Background mouse BUTTONS need the window-stamped construction** (macOS 27.0
-  26A428, 2026-09-19). A CGEvent built from scratch and posted with
-  `CGEventPostToPid` is delivered to the process and then ignored — no field in
-  it says which window the click belongs to, so AppKit resolves no view. The
-  failure is silent and confusing: keystrokes and mouse MOVES land (so `hover`
-  works), the click that follows does nothing, and the call returns done:true.
-  Apple documents `CGEventPostToPid` only as a way to re-route events captured
-  from a tap, so a synthesized one landing was never a guarantee.
-  `BackgroundMouse` fixes it for the Chromium family: an NSEvent built with the
-  target's `windowNumber`, fields 91/92 stamped with the CGWindowID, and the
-  window-local point stamped through the private `CGEventSetWindowLocation`.
-  All three are required — each was removed in turn and the click stopped
-  landing — plus the `focusWithoutRaise` that background actions already do.
-  **Scope, verified live, do not over-claim it:** it lands in Chromium/Electron
-  (Chrome, the Claude app, VS Code, Slack) and **not in AppKit** — TextEdit
-  ignores the stamped event, the plain one, and the Command-modifier
-  click-through variant alike, while the identical foreground click lands
-  instantly. So a background coordinate click/drag outside the Chromium family
-  is refused with `background_unavailable` rather than posted into the void
-  (`backgroundPointerReaches`), and `element_index` actions — an AX press, no
-  focus needed — remain the way to click anything, anywhere.
-  **Moves must stay plain CGEvents**: an NSEvent-built move stops registering as
-  a hover in Chromium, taking every hover-only control with it.
-  **Scroll has no fix**: wheel events have no NSEvent constructor, so they
-  cannot carry the stamp, and background `scroll` is refused too — use
-  `background: false`.
-  Dead ends, already covered, don't repeat them: event-shaping variants on a
-  plain CGEvent (source, pressure/subtype/eventNumber, timing, no preceding
-  move, warping the real cursor), `CGEventPostToPSN`, a `tccutil reset
-  PostEvent` plus daemon restart (no PostEvent check is ever logged), and
-  SkyLight's own `SLEventPostToPid`, which is present but rejects plain
-  CGEvents with `0xb0000000` — it wants `SLEventSetAuthenticationMessage`,
-  which is undocumented.
+- **Background mouse BUTTONS need two stamps** (macOS 27.0 26A428, 2026-09-19).
+  A CGEvent synthesized from scratch and posted with `CGEventPostToPid` is
+  delivered to the process and then ignored: nothing in it says which window the
+  click belongs to, so it reaches `sendEvent:` with window number 0 and no view
+  runs. Keystrokes and mouse MOVES are unaffected, so `hover` works and the
+  click right after it does nothing — with a cheerful done:true. Apple documents
+  `CGEventPostToPid` only as a way to re-route events captured from a tap, so a
+  synthesized one landing was never promised.
+  `BackgroundMouse` stamps two things and only two: **field 51**
+  (`kCGMouseEventWindowNumber`) with the target `CGWindowID`, and the
+  **window-local point** through the private `CGEventSetWindowLocation`. Fields
+  91/92 and building the event through `NSEvent` are NOT needed — measured on
+  both engines; field 51 was the only thing `NSEvent` contributed, and dropping
+  it keeps AppKit off the parallel actuation queues. The target must also be
+  active, which `focusWithoutRaise` already arranges; the alternative
+  (the Command modifier, macOS's click-through gesture) is deliberately unused
+  because the app would see a Cmd-click.
+  **`CGEventSetWindowLocation` takes a TOP-LEFT-origin window point.** AppKit's
+  `locationInWindow` is bottom-left and the window server does that conversion
+  itself, so flipping it here flips it twice and mirrors every click about the
+  window's midline. That shipped as v0.3.7: a click aimed at `clientY≈81`
+  arrived at 626. It also produced a wrong conclusion — clicks aimed at
+  TextEdit's first line landed below its last one, which read as "AppKit ignores
+  these events" and briefly justified a Chromium-only gate. With the math right,
+  a background click lands mid-line in a backgrounded TextEdit. The gate is now
+  about capabilities (`backgroundPointerReaches`: the stamp symbol plus
+  focus-without-raise), not about which app is being driven.
+  **Moves stay plain**, unstamped CGEvents: they are not the broken case and
+  `hover` is verified working exactly as it is.
+  **Scroll has no fix**: a wheel event cannot be stamped this way (verified dead
+  in both engines), so background `scroll` is refused — use `background: false`.
+  Dead ends, don't repeat them: event-shaping variants on an unstamped CGEvent
+  (source, pressure/subtype/eventNumber, timing, no preceding move, warping the
+  real cursor), `CGEventPostToPSN`, `tccutil reset PostEvent` plus a daemon
+  restart (no PostEvent check is ever logged), and SkyLight's own
+  `SLEventPostToPid`, which is present but rejects plain CGEvents with
+  `0xb0000000` — it wants `SLEventSetAuthenticationMessage`, undocumented.
 - **TCC / signing:** the daemon must be launched via its LaunchAgent or `open -a`,
   **never as a terminal child** (TCC attributes the grant to the responsible
   process otherwise). Sign with a **stable identity** (not ad-hoc — ad-hoc cdhash

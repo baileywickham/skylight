@@ -355,19 +355,17 @@ public final class Actuator {
         return CGPoint(x: frame.midX, y: frame.midY)
     }
 
-    /// Refuses a background coordinate action the target app will not act on,
+    /// Refuses a background coordinate action this machine cannot deliver,
     /// instead of posting an event that is swallowed and reporting success —
     /// the silent no-op this whole path exists to end.
-    private func requireBackgroundPointerReaches(_ app: NSRunningApplication, background: Bool,
-                                                 action: String) throws {
-        guard background,
-              !backgroundPointerReaches(bundleID: app.bundleIdentifier, bundleURL: app.bundleURL)
-        else { return }
+    private func requireBackgroundPointerReaches(_ background: Bool, action: String) throws {
+        guard background, !backgroundPointerReaches() else { return }
         throw SkyServiceError(
             code: .backgroundUnavailable,
-            message: "\(action): macOS does not deliver a background coordinate \(action) to "
-                + "'\(app.localizedName ?? "this app")' (only Chromium-family apps accept one). "
-                + "Click by element_index instead — an AX press needs no focus — or retry with background: false.")
+            message: "\(action): this machine cannot deliver a background coordinate \(action) — "
+                + "the private window-stamp or focus-without-raise support is missing "
+                + "(see `skylight doctor`). Click by element_index instead — an AX press needs no "
+                + "focus — or retry with background: false.")
     }
 
     /// What a background mouse event needs to name its target window. nil when
@@ -504,7 +502,7 @@ public final class Actuator {
                 prepareTarget(app: app, window: window, background: background, action: .coordinateClick)
                 point = globalPoint(fromScreenshotX: x, y: y, geometry: geometry!)
             }
-            try requireBackgroundPointerReaches(app, background: background, action: "click")
+            try requireBackgroundPointerReaches(background, action: "click")
             // Which window the press names. A background click is ignored
             // without it (see BackgroundMouse).
             let window = mouseWindow(windowElement)
@@ -764,7 +762,7 @@ public final class Actuator {
             from = globalPoint(fromScreenshotX: input.from_x, y: input.from_y, geometry: geometry!)
             to = globalPoint(fromScreenshotX: input.to_x, y: input.to_y, geometry: geometry!)
         }
-        try requireBackgroundPointerReaches(app, background: background, action: "drag")
+        try requireBackgroundPointerReaches(background, action: "drag")
         let window = mouseWindow(windowElement)
         post(makeMouse(down, at: from, button: button, window: window, background: background),
              pid: app.processIdentifier, background: background)
