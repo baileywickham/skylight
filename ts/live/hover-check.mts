@@ -54,6 +54,17 @@ const indexOf = (t: string, re: RegExp) => {
 };
 const status = (t: string) => lineFor(t, /no hover yet|HOVER SEEN|hover left|BUTTON CLICKED/) ?? "(none)";
 
+// Case A needs the browser frontmost. Say so outright: run straight after
+// another live check and `open -a` may hand the fixture to a window that is not
+// key, which used to surface as a bare FAIL that looked like a regression.
+const frontNow = execFileSync("/usr/bin/osascript",
+  ["-e", 'tell application "System Events" to return name of first application process whose frontmost is true'])
+  .toString().trim();
+if (frontNow !== app) {
+  throw new Error(`${app} is not frontmost (${frontNow} is) — the first leg tests the frontmost case. `
+    + "Close stray test tabs and rerun; the background leg below covers the other case.");
+}
+
 const before = await tree();
 console.log("BASELINE", status(before));
 if (indexOf(before, /Edit cloud environment/) != null) {
