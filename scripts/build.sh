@@ -86,6 +86,46 @@ fi
 codesign --verify --strict --deep "${APP_BUNDLE}"
 echo "==> App bundle created at ${APP_BUNDLE}"
 
+NOTARIZE=""
+if [ -n "${NOTARY_PASSWORD:-}" ] && [ -n "${SIGN_IDENTITY}" ]; then
+    NOTARIZE=1
+    NOTARY_ARGS="--apple-id ${APPLE_ID} --team-id ${APPLE_TEAM_ID} --password ${NOTARY_PASSWORD}"
+elif [ -n "${NOTARY_PASSWORD:-}" ]; then
+    echo "==> Ad-hoc signed build; skipping notarization"
+else
+    echo "==> NOTARY_PASSWORD not set, skipping notarization"
+fi
+
+# notarize <file>: submit to the notary service and fail the build unless it is accepted.
+notarize() {
+    local result id
+    result=$(xcrun notarytool submit "$1" ${NOTARY_ARGS} --wait --timeout 30m 2>&1) || true
+    echo "${result}"
+    id=$(echo "${result}" | grep "id:" | head -1 | awk '{print $2}')
+    if ! echo "${result}" | grep -q "status: Accepted"; then
+        echo "==> Notarization failed, fetching log..."
+        xcrun notarytool log "${id}" ${NOTARY_ARGS} || true
+        exit 1
+    fi
+}
+
+# The APP must carry its own stapled ticket, not just the DMG: brew copies the
+# app out of the DMG, and the DMG's ticket stays behind. Without one, Gatekeeper
+# has to fetch the ticket online, and macOS 27.2 kills an app the user never
+# opened from Finder when that lookup fails ("could not verify … free of
+# malware", no Open button). The daemon and CLI are never opened from Finder;
+# launchd and a brew symlink start them. So notarize and staple the app first,
+# then package the stapled app.
+if [ -n "${NOTARIZE}" ]; then
+    echo "==> Notarizing app..."
+    APP_ZIP="${BUILD_DIR}/${APP_NAME}-notarize.zip"
+    ditto -c -k --sequesterRsrc --keepParent "${APP_BUNDLE}" "${APP_ZIP}"
+    notarize "${APP_ZIP}"
+    rm -f "${APP_ZIP}"
+    xcrun stapler staple "${APP_BUNDLE}"
+    echo "==> App notarized and stapled"
+fi
+
 # DMG with an Applications symlink for drag-to-install
 DMG_NAME="${APP_NAME}-${VERSION}-macOS.dmg"
 DMG_PATH="${BUILD_DIR}/${DMG_NAME}"
@@ -106,22 +146,10 @@ ZIP_PATH="${BUILD_DIR}/${APP_NAME}-${VERSION}-macOS.zip"
 ditto -c -k --sequesterRsrc --keepParent "${APP_BUNDLE}" "${ZIP_PATH}"
 echo "==> Zip created at ${ZIP_PATH}"
 
-if [ -n "${NOTARY_PASSWORD:-}" ] && [ -n "${SIGN_IDENTITY}" ]; then
-    NOTARY_ARGS="--apple-id ${APPLE_ID} --team-id ${APPLE_TEAM_ID} --password ${NOTARY_PASSWORD}"
+if [ -n "${NOTARIZE}" ]; then
     echo "==> Notarizing DMG..."
-    DMG_RESULT=$(xcrun notarytool submit "${DMG_PATH}" ${NOTARY_ARGS} --wait --timeout 30m 2>&1) || true
-    echo "${DMG_RESULT}"
-    DMG_ID=$(echo "${DMG_RESULT}" | grep "id:" | head -1 | awk '{print $2}')
-    if ! echo "${DMG_RESULT}" | grep -q "status: Accepted"; then
-        echo "==> Notarization failed, fetching log..."
-        xcrun notarytool log "${DMG_ID}" ${NOTARY_ARGS} || true
-        exit 1
-    fi
+    notarize "${DMG_PATH}"
     xcrun stapler staple "${DMG_PATH}"
     echo "==> DMG notarized and stapled"
-elif [ -n "${NOTARY_PASSWORD:-}" ]; then
-    echo "==> Ad-hoc signed build; skipping notarization"
-else
-    echo "==> NOTARY_PASSWORD not set, skipping notarization"
 fi
 echo "==> Done!"

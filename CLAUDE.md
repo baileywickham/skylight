@@ -113,6 +113,11 @@ if node is missing or older, rather than reaching for a fallback.
 Releases: `./release.sh patch` tags `vX.Y.Z`; `.github/workflows/release.yml`
 runs `scripts/build.sh` (sign + notarize + DMG/ZIP), publishes the GitHub
 release, then calls the tap's reusable `bump-cask` workflow to update the cask.
+`build.sh` notarizes and staples the **app** before packaging it, then the
+DMG: brew copies the app out of the DMG and leaves the DMG's ticket behind,
+and macOS 27.2 kills an unstapled app that was never opened from Finder
+whenever Gatekeeper's online ticket lookup fails (prompt type 6, "could not
+verify", no Open button). The daemon and CLI are never opened from Finder.
 Dev install from a checkout: `scripts/install-local.sh` (same build, local
 Developer ID / Apple Development identity, no notarization, `/Applications`).
 Never run the daemon as a terminal child in installed mode: TCC keys the grants
