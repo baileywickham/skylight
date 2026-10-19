@@ -292,7 +292,36 @@ public struct CapabilitiesResult: Codable, Equatable {
 
 public struct ActionResult: Codable, Equatable {
     public let done: Bool
-    public init(done: Bool) { self.done = done }
+    /// The target app's state right after the action, when the request asked
+    /// for it with `return_state` (a diff against the last capture, like
+    /// get_app_state). Saves the usual act-then-capture round trip.
+    public let state: AppState?
+    /// Set instead of `state` when the action succeeded but the follow-up
+    /// capture failed — the action still happened.
+    public let state_error: String?
+    public init(done: Bool, state: AppState? = nil, state_error: String? = nil) {
+        self.done = done
+        self.state = state
+        self.state_error = state_error
+    }
+}
+
+/// The optional fields every action accepts on top of its own input. Decoded
+/// separately from the action's params, so the per-action input types stay
+/// about the action itself.
+public struct PostActionParams: Codable, Equatable {
+    public let app: String?
+    /// Capture the app's tree after the action and return it in
+    /// `ActionResult.state`. Needs `app`.
+    public let return_state: Bool?
+    /// With `return_state`: include the screenshot too (default false — the
+    /// tree is usually enough to verify, and far cheaper).
+    public let return_screenshot: Bool?
+    public init(app: String? = nil, return_state: Bool? = nil, return_screenshot: Bool? = nil) {
+        self.app = app
+        self.return_state = return_state
+        self.return_screenshot = return_screenshot
+    }
 }
 
 public struct GetAppStateInput: Codable, Equatable {
@@ -349,12 +378,17 @@ public struct ClickInput: Codable, Equatable {
     /// no pointer). A real click always follows a pointer move, and hover-only
     /// affordances never render without one. Pass false to press without it.
     public let hover: Bool?
+    /// Modifier keys held during the press, "+"-separated like press_key's
+    /// chord modifiers: "cmd", "shift", "cmd+shift", "alt", "ctrl". An AX
+    /// press cannot carry modifiers, so an element_index click with modifiers
+    /// becomes a pointer click at the element's visible center.
+    public let modifiers: String?
     /// Per-request background override: true = never activate / post per-pid,
     /// false = force activation, absent = daemon default (`skylight background`).
     public let background: Bool?
     public init(app: String? = nil, element_index: Int? = nil, x: Double? = nil, y: Double? = nil,
                 display_id: Int? = nil, mouse_button: String? = nil, click_count: Int? = nil,
-                hover: Bool? = nil, background: Bool? = nil) {
+                hover: Bool? = nil, modifiers: String? = nil, background: Bool? = nil) {
         self.app = app
         self.element_index = element_index
         self.x = x
@@ -363,6 +397,7 @@ public struct ClickInput: Codable, Equatable {
         self.mouse_button = mouse_button
         self.click_count = click_count
         self.hover = hover
+        self.modifiers = modifiers
         self.background = background
     }
 }
@@ -471,28 +506,40 @@ public struct SetValueInput: Codable, Equatable {
 }
 
 public struct DragInput: Codable, Equatable {
-    /// Required for window-coordinate drags; optional with display_id (the app
-    /// under the start point is hit-tested, frontmost as fallback).
+    /// Required for window-coordinate and element drags; optional with
+    /// display_id (the app under the start point is hit-tested, frontmost as
+    /// fallback).
     public let app: String?
-    public let from_x: Double
-    public let from_y: Double
-    public let to_x: Double
-    public let to_y: Double
-    /// When set, coordinates are pixels of the latest `screenshot` of this display.
+    /// Each end is either an element (from get_app_state — the pointer goes to
+    /// its visible center) or an x/y point.
+    public let from_element_index: Int?
+    public let to_element_index: Int?
+    public let from_x: Double?
+    public let from_y: Double?
+    public let to_x: Double?
+    public let to_y: Double?
+    /// When set, x/y are pixels of the latest `screenshot` of this display.
     public let display_id: Int?
     public let mouse_button: String?
+    /// Modifier keys held for the whole drag, e.g. "alt" to copy in Finder.
+    public let modifiers: String?
     /// Per-request background override: true = never activate / post per-pid,
     /// false = force activation, absent = daemon default (`skylight background`).
     public let background: Bool?
-    public init(app: String? = nil, from_x: Double, from_y: Double, to_x: Double, to_y: Double,
-                display_id: Int? = nil, mouse_button: String? = nil, background: Bool? = nil) {
+    public init(app: String? = nil, from_element_index: Int? = nil, to_element_index: Int? = nil,
+                from_x: Double? = nil, from_y: Double? = nil, to_x: Double? = nil, to_y: Double? = nil,
+                display_id: Int? = nil, mouse_button: String? = nil, modifiers: String? = nil,
+                background: Bool? = nil) {
         self.app = app
+        self.from_element_index = from_element_index
+        self.to_element_index = to_element_index
         self.from_x = from_x
         self.from_y = from_y
         self.to_x = to_x
         self.to_y = to_y
         self.display_id = display_id
         self.mouse_button = mouse_button
+        self.modifiers = modifiers
         self.background = background
     }
 }
@@ -531,5 +578,206 @@ public struct SelectTextInput: Codable, Equatable {
         self.suffix = suffix
         self.selection_type = selection_type
         self.background = background
+    }
+}
+
+// MARK: - Launching
+
+public struct OpenAppInput: Codable, Equatable {
+    /// App name ("Preview"), bundle id ("com.apple.Preview"), or the path of
+    /// an .app bundle. Need not be running.
+    public let app: String
+    /// A URL or absolute file path to open with the app.
+    public let url: String?
+    /// Per-request background override: true launches without activating, so
+    /// the user's frontmost app stays in front.
+    public let background: Bool?
+    public init(app: String, url: String? = nil, background: Bool? = nil) {
+        self.app = app
+        self.url = url
+        self.background = background
+    }
+}
+
+public struct OpenAppResult: Codable, Equatable {
+    public let app: AppInfo
+    /// false when the app was already running.
+    public let launched: Bool
+    public init(app: AppInfo, launched: Bool) {
+        self.app = app
+        self.launched = launched
+    }
+}
+
+// MARK: - Finding and waiting
+
+/// One element matched by `find` / `wait_for`. The index is live: act on it
+/// directly, exactly like an index from get_app_state.
+public struct FoundElement: Codable, Equatable {
+    public let element_index: Int
+    public let role: String
+    public let title: String?
+    public let value: String?
+    /// The same line get_app_state would print for it.
+    public let line: String
+    /// The nearest labelled ancestors, outermost first ("AXGroup \"Sidebar\" >
+    /// AXList"), to tell same-named matches apart.
+    public let ancestors: String
+    public init(element_index: Int, role: String, title: String?, value: String?, line: String, ancestors: String) {
+        self.element_index = element_index
+        self.role = role
+        self.title = title
+        self.value = value
+        self.line = line
+        self.ancestors = ancestors
+    }
+}
+
+public struct FindInput: Codable, Equatable {
+    public let app: String
+    /// AX role, with or without the "AX" prefix ("button" = "AXButton").
+    /// Case-insensitive.
+    public let role: String?
+    /// Case-insensitive substring of the element's label or value.
+    public let text: String?
+    /// Search this window (from list_windows). Default: the focused window.
+    public let window_id: Int?
+    /// Search only this element's subtree.
+    public let root_element_index: Int?
+    /// Default 50.
+    public let max_results: Int?
+    public let max_depth: Int?
+    public let max_nodes: Int?
+    public init(app: String, role: String? = nil, text: String? = nil, window_id: Int? = nil,
+                root_element_index: Int? = nil, max_results: Int? = nil,
+                max_depth: Int? = nil, max_nodes: Int? = nil) {
+        self.app = app
+        self.role = role
+        self.text = text
+        self.window_id = window_id
+        self.root_element_index = root_element_index
+        self.max_results = max_results
+        self.max_depth = max_depth
+        self.max_nodes = max_nodes
+    }
+}
+
+public struct FindResult: Codable, Equatable {
+    public let matches: [FoundElement]
+    /// More elements matched than `max_results`.
+    public let truncated: Bool
+    public init(matches: [FoundElement], truncated: Bool) {
+        self.matches = matches
+        self.truncated = truncated
+    }
+}
+
+public struct WaitForInput: Codable, Equatable {
+    public let app: String
+    /// Element condition, as in `find`: at least one element matches.
+    public let role: String?
+    public let text: String?
+    /// Window condition: some window of the app has a title containing this
+    /// (case-insensitive) — a new document window, a "Save" dialog.
+    public let window_title: String?
+    /// Invert the element/window condition: wait until nothing matches (a
+    /// spinner went away, a sheet closed).
+    public let gone: Bool?
+    /// Also (or with no other condition, only) wait until the tree stops
+    /// changing between two polls — an Electron view done loading.
+    public let stable: Bool?
+    /// Default 5000, capped at 25000.
+    public let timeout_ms: Int?
+    public let window_id: Int?
+    public let root_element_index: Int?
+    public init(app: String, role: String? = nil, text: String? = nil, window_title: String? = nil,
+                gone: Bool? = nil, stable: Bool? = nil, timeout_ms: Int? = nil,
+                window_id: Int? = nil, root_element_index: Int? = nil) {
+        self.app = app
+        self.role = role
+        self.text = text
+        self.window_title = window_title
+        self.gone = gone
+        self.stable = stable
+        self.timeout_ms = timeout_ms
+        self.window_id = window_id
+        self.root_element_index = root_element_index
+    }
+}
+
+public struct WaitForResult: Codable, Equatable {
+    public let elapsed_ms: Int
+    /// Elements matching the element condition when it was met (empty for
+    /// `gone`, window-only, or stable-only waits).
+    public let matches: [FoundElement]
+    public init(elapsed_ms: Int, matches: [FoundElement]) {
+        self.elapsed_ms = elapsed_ms
+        self.matches = matches
+    }
+}
+
+// MARK: - Menus
+
+public struct MenuSelectInput: Codable, Equatable {
+    public let app: String
+    /// Menu titles from the menu bar down, e.g. ["File", "Export As…"].
+    /// Case-insensitive; "..." matches "…".
+    public let path: [String]
+    public let background: Bool?
+    public init(app: String, path: [String], background: Bool? = nil) {
+        self.app = app
+        self.path = path
+        self.background = background
+    }
+}
+
+// MARK: - Batch
+
+public struct BatchStep: Codable, Equatable {
+    public let method: String
+    public let params: JSONValue?
+    public init(method: String, params: JSONValue? = nil) {
+        self.method = method
+        self.params = params
+    }
+}
+
+public struct BatchInput: Codable, Equatable {
+    /// Run in order, at most `maxBatchSteps`.
+    public let steps: [BatchStep]
+    /// Stop at the first failed step (default true). The remaining steps are
+    /// not run and do not appear in the results.
+    public let stop_on_error: Bool?
+    public init(steps: [BatchStep], stop_on_error: Bool? = nil) {
+        self.steps = steps
+        self.stop_on_error = stop_on_error
+    }
+}
+
+public struct BatchStepResult: Codable, Equatable {
+    public let method: String
+    public let ok: Bool
+    public let result: JSONValue?
+    public let error: ErrorPayload?
+    public init(method: String, ok: Bool, result: JSONValue?, error: ErrorPayload?) {
+        self.method = method
+        self.ok = ok
+        self.result = result
+        self.error = error
+    }
+}
+
+public struct BatchResult: Codable, Equatable {
+    /// One per step that ran, in order.
+    public let results: [BatchStepResult]
+    /// True when every step ran and succeeded.
+    public let completed: Bool
+    /// Why the batch stopped early when it was not a failed step — it ran out
+    /// of its time budget, and the remaining steps were never started.
+    public let stopped_reason: String?
+    public init(results: [BatchStepResult], completed: Bool, stopped_reason: String? = nil) {
+        self.results = results
+        self.completed = completed
+        self.stopped_reason = stopped_reason
     }
 }

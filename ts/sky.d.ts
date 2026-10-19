@@ -180,12 +180,23 @@ export interface AppState {
     text: string;
     /** Absent when the screenshot failed but AX capture succeeded (AX-only degraded response). */
     screenshot?: Screenshot | null;
-    /** Present exactly when screenshot is absent: "<code>: <message>". */
+    /** Set when a requested screenshot failed: "<code>: <message>". Both are absent on an action's return_state without return_screenshot. */
     screenshot_error?: string | null;
     diffed: boolean;
 }
 export interface ActionResult {
     done: boolean;
+    /** The app's state right after the action, when the call passed return_state (a diff against the last capture, like get_app_state). */
+    state?: AppState | null;
+    /** Set instead of state when the action succeeded but the follow-up capture failed — the action still happened. */
+    state_error?: string | null;
+}
+/** Accepted by every action on top of its own fields. */
+export interface PostActionOptions {
+    /** Capture the app's tree after the action and return it in ActionResult.state — saves the act-then-get_app_state round trip. Needs `app`. */
+    return_state?: boolean;
+    /** With return_state: include the screenshot too (default false; the tree is usually enough to verify, and far cheaper). */
+    return_screenshot?: boolean;
 }
 export interface GetAppStateInput {
     app: AppIdentifier;
@@ -202,7 +213,7 @@ export interface GetAppStateInput {
     /** Serialize only this element's subtree (an index from an earlier capture) instead of the whole window — the pane you are working in, so another webview's churn stays out of the tree and the diff. The screenshot and click coordinates still describe the whole window. */
     root_element_index?: number;
 }
-export interface ClickInput {
+export interface ClickInput extends PostActionOptions {
     /** Required with element_index or window coordinates. Optional with display_id: the app under the point is hit-tested (frontmost as fallback). */
     app?: AppIdentifier;
     element_index?: number;
@@ -215,11 +226,13 @@ export interface ClickInput {
     click_count?: number;
     /** Move the pointer onto the point before pressing (default true; coordinate clicks only — an element_index click is an AX press). Hover-only affordances never render without it. */
     hover?: boolean;
+    /** Modifier keys held during the press, "+"-separated: "cmd", "shift", "cmd+shift", "alt", "ctrl". An element_index click with modifiers becomes a pointer click at the element's visible center (an AX press cannot carry modifiers). */
+    modifiers?: string;
     /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
     background?: boolean;
 }
 /** Park the pointer over an element or point without clicking, so hover-only UI renders for the next capture. In background mode the user's real cursor never moves. Reaches the app's KEY window only — a hover into another window of the same app is dropped. */
-export interface HoverInput {
+export interface HoverInput extends PostActionOptions {
     /** Required with element_index or window coordinates; optional with display_id. */
     app?: AppIdentifier;
     element_index?: number;
@@ -232,7 +245,7 @@ export interface HoverInput {
     /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
     background?: boolean;
 }
-export interface PressKeyInput {
+export interface PressKeyInput extends PostActionOptions {
     /** Default: the frontmost app. */
     app?: AppIdentifier;
     /** "+"-separated chord of X-keysym-style names, e.g. "Ctrl+Shift+t". */
@@ -242,7 +255,7 @@ export interface PressKeyInput {
     /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
     background?: boolean;
 }
-export interface TypeTextInput {
+export interface TypeTextInput extends PostActionOptions {
     /** Default: the frontmost app. */
     app?: AppIdentifier;
     text: string;
@@ -251,7 +264,7 @@ export interface TypeTextInput {
     /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
     background?: boolean;
 }
-export interface ScrollInput {
+export interface ScrollInput extends PostActionOptions {
     app: AppIdentifier;
     element_index: number;
     direction: Direction;
@@ -259,28 +272,33 @@ export interface ScrollInput {
     /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
     background?: boolean;
 }
-export interface SetValueInput {
+export interface SetValueInput extends PostActionOptions {
     app: AppIdentifier;
     element_index: number;
     value: string;
     /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
     background?: boolean;
 }
-export interface DragInput {
-    /** Required for window coordinates; optional with display_id (hit-tested at the start point). */
+export interface DragInput extends PostActionOptions {
+    /** Required for window coordinates and element ends; optional with display_id (hit-tested at the start point). */
     app?: AppIdentifier;
+    /** Each end is an element (the pointer goes to its visible center) or an x/y point. */
+    from_element_index?: number;
+    to_element_index?: number;
     /** Screenshot-pixel coordinates (see coordinate model): the latest get_app_state window capture, or with display_id the latest screenshot of that display. */
-    from_x: number;
-    from_y: number;
-    to_x: number;
-    to_y: number;
+    from_x?: number;
+    from_y?: number;
+    to_x?: number;
+    to_y?: number;
     /** Interpret coordinates as pixels of the latest `screenshot` of this display. */
     display_id?: number;
     mouse_button?: MouseButton;
+    /** Modifier keys held for the whole drag, e.g. "alt" to copy in Finder. */
+    modifiers?: string;
     /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
     background?: boolean;
 }
-export interface PerformSecondaryActionInput {
+export interface PerformSecondaryActionInput extends PostActionOptions {
     app: AppIdentifier;
     element_index: number;
     /** AX action name, e.g. "AXShowMenu". */
@@ -288,7 +306,7 @@ export interface PerformSecondaryActionInput {
     /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
     background?: boolean;
 }
-export interface SelectTextInput {
+export interface SelectTextInput extends PostActionOptions {
     app: AppIdentifier;
     element_index: number;
     text: string;
@@ -298,7 +316,104 @@ export interface SelectTextInput {
     /** Per-request override. true = act without activating or raising the app; false = bring it frontmost first. Absent = daemon default (`capabilities().background_default`, normally true). */
     background?: boolean;
 }
-import type { ActionResult, AppState, BringToActiveSpaceInput, BringToActiveSpaceResult, CapabilitiesResult, ClickInput, ClipboardResult, DisplayScreenshot, DragInput, GetAppStateInput, HoverInput, ListAppsInput, ListAppsResult, ListDisplaysResult, ListWindowsInput, ListWindowsResult, PerformSecondaryActionInput, PressKeyInput, ScreenshotInput, ScrollInput, SelectTextInput, SetValueInput, TypeTextInput, WriteClipboardInput, ZoomInput, ZoomResult } from "./types.js";
+export interface OpenAppInput {
+    /** App name ("Preview"), bundle id, or path of an .app bundle. Need not be running. */
+    app: AppIdentifier;
+    /** A URL or absolute file path to open with the app. Needs the app's full tier. */
+    url?: string;
+    /** true launches without activating, so the user's frontmost app stays in front. */
+    background?: boolean;
+}
+export interface OpenAppResult {
+    app: AppInfo;
+    /** false when the app was already running. */
+    launched: boolean;
+}
+/** One element matched by find / wait_for. The index is live: act on it like one from get_app_state. */
+export interface FoundElement {
+    element_index: number;
+    role: string;
+    title?: string | null;
+    value?: string | null;
+    /** The line get_app_state would print for it. */
+    line: string;
+    /** Nearest labelled ancestors, outermost first, to tell same-named matches apart. */
+    ancestors: string;
+}
+export interface FindInput {
+    app: AppIdentifier;
+    /** AX role, with or without "AX" ("button" = "AXButton"); case-insensitive. */
+    role?: string;
+    /** Case-insensitive substring of the element's label or value. */
+    text?: string;
+    window_id?: number;
+    /** Search only this element's subtree. */
+    root_element_index?: number;
+    /** Default 50, max 500. */
+    max_results?: number;
+    max_depth?: number;
+    max_nodes?: number;
+}
+export interface FindResult {
+    matches: FoundElement[];
+    /** More elements matched than max_results. */
+    truncated: boolean;
+}
+export interface WaitForInput {
+    app: AppIdentifier;
+    /** Element condition, as in find: at least one element matches. */
+    role?: string;
+    text?: string;
+    /** Window condition: some window title contains this (case-insensitive). */
+    window_title?: string;
+    /** Invert the element/window condition: wait until nothing matches. */
+    gone?: boolean;
+    /** Also (or alone) wait until the tree stops changing between polls. */
+    stable?: boolean;
+    /** Default 5000, capped at 25000. Running out is a `timeout` error. */
+    timeout_ms?: number;
+    window_id?: number;
+    root_element_index?: number;
+}
+export interface WaitForResult {
+    elapsed_ms: number;
+    /** Matches when the element condition was met (empty for gone, window-only and stable-only waits). */
+    matches: FoundElement[];
+}
+export interface MenuSelectInput extends PostActionOptions {
+    app: AppIdentifier;
+    /** Menu titles from the menu bar down, e.g. ["File", "Export As…"]. Case-insensitive; "..." matches "…". */
+    path: string[];
+    background?: boolean;
+}
+export interface BatchStep {
+    method: string;
+    params?: Record<string, unknown>;
+}
+export interface BatchInput {
+    /** Run in order inside one request; at most 50. Methods: the actions, get_app_state, list_windows, find, wait_for, read/write_clipboard. */
+    steps: BatchStep[];
+    /** Stop at the first failed step (default true); later steps are not run and get no result. */
+    stop_on_error?: boolean;
+}
+export interface BatchStepResult {
+    method: string;
+    ok: boolean;
+    result?: unknown;
+    error?: {
+        code: string;
+        message: string;
+    } | null;
+}
+export interface BatchResult {
+    /** One per step that ran, in order. */
+    results: BatchStepResult[];
+    /** Every step ran and succeeded. */
+    completed: boolean;
+    /** Set when the batch ran out of its time budget (~22s) and did not start the remaining steps. */
+    stopped_reason?: string | null;
+}
+import type { ActionResult, AppState, BatchInput, BatchResult, BringToActiveSpaceInput, BringToActiveSpaceResult, CapabilitiesResult, ClickInput, ClipboardResult, DisplayScreenshot, DragInput, FindInput, FindResult, GetAppStateInput, HoverInput, ListAppsInput, ListAppsResult, ListDisplaysResult, ListWindowsInput, ListWindowsResult, MenuSelectInput, OpenAppInput, OpenAppResult, PerformSecondaryActionInput, PressKeyInput, ScreenshotInput, ScrollInput, SelectTextInput, SetValueInput, TypeTextInput, WaitForInput, WaitForResult, WriteClipboardInput, ZoomInput, ZoomResult } from "./types.js";
 export interface SkyConfig {
     socket_path: string;
     post_action_sleep_ms: number;
@@ -355,6 +470,16 @@ export declare class SkyClient {
     drag(input: DragInput): Promise<ActionResult>;
     perform_secondary_action(input: PerformSecondaryActionInput): Promise<ActionResult>;
     select_text(input: SelectTextInput): Promise<ActionResult>;
+    /** Press a menu item by its title path from the menu bar, e.g. ["File", "Export As…"]. No menu opens on screen. */
+    menu_select(input: MenuSelectInput): Promise<ActionResult>;
+    /** Launch an app (it need not be running), optionally opening a URL or file with it. */
+    open_app(input: OpenAppInput): Promise<OpenAppResult>;
+    /** Elements matching a role and/or text, with live indices — instead of reading the whole tree. */
+    find(input: FindInput): Promise<FindResult>;
+    /** Block until an element or window appears (or, with gone, disappears) or the tree settles. Rejects with code "timeout" when it never does. */
+    wait_for(input: WaitForInput): Promise<WaitForResult>;
+    /** Run several steps in order in one round trip. */
+    batch(input: BatchInput): Promise<BatchResult>;
     /** Attached displays; ids feed screenshot/zoom/click/drag display_id. */
     list_displays(): Promise<ListDisplaysResult>;
     /** Whole-display capture (default 1 px per point). Pixel coordinates from it go to click/drag with display_id. */

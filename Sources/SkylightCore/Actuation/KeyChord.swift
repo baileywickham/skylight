@@ -181,3 +181,20 @@ public func parseKeyChord(_ chord: String) throws -> KeyChord {
     }
     return KeyChord(keyCode: code, flags: flags)
 }
+
+/// Parses a click/drag `modifiers` string — "+"-separated modifier names as in
+/// a chord ("cmd", "shift+alt") — into event flags. nil or empty is no
+/// modifiers; a non-modifier key is an error rather than ignored.
+public func parseModifiers(_ modifiers: String?) throws -> CGEventFlags {
+    guard let modifiers, !modifiers.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
+    var flags: CGEventFlags = []
+    for part in modifiers.split(separator: "+", omittingEmptySubsequences: false) {
+        let name = part.trimmingCharacters(in: .whitespaces).lowercased()
+        guard let flag = modifierFlags[name] else {
+            throw SkyServiceError(code: .invalidParams,
+                                  message: "unknown modifier '\(name)' in '\(modifiers)' (use cmd, shift, alt/option, ctrl)")
+        }
+        flags.insert(flag)
+    }
+    return flags
+}

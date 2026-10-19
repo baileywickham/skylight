@@ -12,7 +12,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { SkyClient, SkyError, neverReachedDaemon } from "./client.js";
-import type { AppState, DisplayScreenshot, ZoomResult } from "./types.js";
+import type { ActionResult, AppState, BatchResult, DisplayScreenshot, FoundElement, ZoomResult } from "./types.js";
 
 const MAX_DIMENSION = Number(process.env.SKYLIGHT_MCP_MAX_DIMENSION ?? 1568);
 
@@ -75,8 +75,68 @@ function appStateContent(state: AppState): Content[] {
   const shot = state.screenshot;
   const header = shot
     ? `screenshot ${shot.width}x${shot.height}px (${shot.url}); click/drag x,y are pixels of this image`
-    : `no screenshot (${state.screenshot_error}); act by element_index`;
+    : state.screenshot_error
+      ? `no screenshot (${state.screenshot_error}); act by element_index`
+      : "tree only (no screenshot requested); coordinates still refer to the last screenshot";
   return [...text(`${header}\n${state.diffed ? "[diff since last capture]\n" : ""}${state.text}`), ...image(shot?.data_url)];
+}
+
+/** An action's result: the state it returned (return_state) when there is one. */
+function actionContent(result: ActionResult): Content[] {
+  if (result.state) return [...text("done; state after the action:"), ...appStateContent(result.state)];
+  if (result.state_error) return text(`done, but the follow-up capture failed: ${result.state_error}`);
+  return text(result);
+}
+
+function foundContent(matches: FoundElement[], extra: string): Content[] {
+  if (matches.length === 0) return text(`no matches${extra}`);
+  const lines = matches.map((m) => (m.ancestors ? `${m.line}    in ${m.ancestors}` : m.line));
+  return text(`${matches.length} match(es)${extra}; act on these indices directly:\n${lines.join("\n")}`);
+}
+
+function batchContent(batch: BatchResult): Content[] {
+  const out: Content[] = [];
+  batch.results.forEach((r, i) => {
+    const head = `${i + 1}. ${r.method}: `;
+    if (!r.ok) {
+      out.push(...text(`${head}FAILED ${r.error?.code}: ${r.error?.message}`));
+      return;
+    }
+    const result = r.result as ActionResult | undefined;
+    if (result?.state || result?.state_error) {
+      out.push(...text(head.trimEnd()), ...actionContent(result));
+    } else if (r.method === "get_app_state") {
+      out.push(...text(head.trimEnd()), ...appStateContent(r.result as AppState));
+    } else {
+      out.push(...text(head + JSON.stringify(r.result)));
+    }
+  });
+  out.push(...text(batch.completed ? "batch completed"
+    : batch.stopped_reason ? `batch stopped: ${batch.stopped_reason}`
+    : "batch stopped before finishing (see the failed step)"));
+  return out;
+}
+
+/**
+ * Batch steps carry daemon params. Give the ones whose MCP tools rename or
+ * default fields the same treatment those tools get, so a step means what the
+ * matching tool call would.
+ */
+function normalizeStep(method: string, params: Record<string, unknown> = {}): Record<string, unknown> {
+  switch (method) {
+    case "get_app_state": {
+      const { disable_diff, include_screenshot, ...rest } = params;
+      return {
+        ...rest,
+        disableDiff: rest.disableDiff ?? disable_diff,
+        include_data_url: rest.include_data_url ?? include_screenshot ?? true,
+        max_dimension: rest.max_dimension ?? MAX_DIMENSION,
+      };
+    }
+    case "scroll": return { ...params, pages: params.pages ?? 1 };
+    case "select_text": return { ...params, selection_type: params.selection_type ?? "select" };
+    default: return params;
+  }
 }
 
 function displayShotContent(shot: DisplayScreenshot): Content[] {
@@ -98,6 +158,12 @@ const background = z.boolean().optional().describe(
   "Override the daemon default for this call. Actions already run in the background by default (app not raised, the user's focus and cursor untouched; see capabilities.background_default). Pass false only when the app must come to the front.",
 );
 const displayId = z.number().int().optional().describe("Display id from list_displays. Default: the main display.");
+const modifiers = z.string().optional().describe("Modifier keys held during it, \"+\"-separated: \"cmd\", \"shift\", \"cmd+shift\", \"alt\", \"ctrl\".");
+// Every action accepts these (see PostActionOptions).
+const postAction = {
+  return_state: z.boolean().optional().describe("Return the app's tree (a diff since the last capture) after the action, saving a get_app_state call. Needs app."),
+  return_screenshot: z.boolean().optional().describe("With return_state: include a screenshot too (resets click coordinates to that image)."),
+};
 
 const server = new McpServer(
   { name: "skylight", version: "0.3.0" },
@@ -108,7 +174,9 @@ const server = new McpServer(
       "Coordinates are ALWAYS pixels of the most recent image of that target (window capture per app, screenshot per display); the daemon converts them; zoom takes the same pixels (pass app for a window, display_id for a display).",
       "A control a web UI only renders on hover has no element_index until you hover it: call hover (element_index or x/y), then get_app_state again, then click it.",
       "Actions run in the background by default: the target app is not raised and the user's focus and cursor are untouched, so they can keep working. Actions on different apps run in parallel. Pass background: false only when the app must come to the front.",
-      "Apps may be gated by an allowlist (approval_required): tell the user to run `skylight approve \"<App>\"`.",
+      "To locate a control without reading the whole tree, use find (role and/or text) — its indices are live. To wait for UI to appear, disappear or settle, use wait_for instead of re-capturing in a loop. Menu commands: menu_select with the title path. Apps that are not running: open_app.",
+      "Add return_state: true to an action to get the tree back in the same call; chain several steps with batch.",
+      "Apps may be gated by an allowlist or a tier (approval_required). Terminals and editors default to tier click (no typing, keys, drags or menus) because typing there runs commands — do not work around it; tell the user, who can run `skylight approve \"<App>\"` or `skylight tier \"<App>\" full`.",
     ].join("\n"),
   },
 );
@@ -169,9 +237,11 @@ server.registerTool("click", {
     mouse_button: z.enum(["left", "right", "middle"]).optional(),
     click_count: z.number().int().min(1).optional().describe("2 = double-click, 3 = triple."),
     hover: z.boolean().optional().describe("Move the pointer onto the point first. Default true (coordinate clicks only) — a click with no preceding move never reveals hover-only controls."),
+    modifiers: modifiers.describe("Modifier keys held during the click (\"cmd\" to add to a selection, \"shift\" to extend it). With element_index this becomes a pointer click at the element's center."),
     background,
+    ...postAction,
   },
-}, (input) => run(async () => text(await sky.click(input))));
+}, (input) => run(async () => actionContent(await sky.click(input))));
 
 server.registerTool("hover", {
   description: "Park the pointer over an element or point WITHOUT clicking, then re-capture get_app_state: this is how you reach a control that a web UI only renders on hover (row actions, \"⋯\" menus, tooltips). Background mode posts the move into the app, so the user's real cursor never moves. Same targeting as click: element_index, x/y of the latest get_app_state image, or x/y of the latest screenshot with display_id. Reaches the app's key window only (is_focused in list_windows) — a hover into another window of the same app is dropped; raise that window first.",
@@ -183,8 +253,9 @@ server.registerTool("hover", {
     display_id: z.number().int().optional().describe("Interpret x/y as pixels of the latest screenshot of this display."),
     settle_ms: z.number().int().optional().describe("Hold the pointer there this long before returning. Default 250."),
     background,
+    ...postAction,
   },
-}, (input) => run(async () => text(await sky.hover(input))));
+}, (input) => run(async () => actionContent(await sky.hover(input))));
 
 server.registerTool("press_key", {
   description: "Press a key chord: \"+\"-separated X-keysym names, e.g. \"Return\", \"Cmd+s\", \"Ctrl+Shift+Tab\", \"Escape\". Defaults to the frontmost app. Use repeat to send it N times in one call.",
@@ -194,8 +265,9 @@ server.registerTool("press_key", {
     repeat: z.number().int().positive().optional()
       .describe("Send the chord this many times (default 1, capped at 200). A chord cannot express repetition, so this is how you delete 20 characters in one call."),
     background,
+    ...postAction,
   },
-}, (input) => run(async () => text(await sky.press_key(input))));
+}, (input) => run(async () => actionContent(await sky.press_key(input))));
 
 server.registerTool("type_text", {
   description: "Type text. Pass element_index (with app) to focus that field first — without it the text goes wherever focus happens to be, which may be another field or nowhere. Apps may autocorrect; verify by re-capturing.",
@@ -205,40 +277,47 @@ server.registerTool("type_text", {
     element_index: z.number().int().optional()
       .describe("Focus this element (from get_app_state) before typing; needs app. Errors if the element will not take focus, instead of typing into the wrong place."),
     background,
+    ...postAction,
   },
-}, (input) => run(async () => text(await sky.type_text(input))));
+}, (input) => run(async () => actionContent(await sky.type_text(input))));
 
 server.registerTool("scroll", {
-  description: "Scroll an element from get_app_state by pages of its visible size. Needs background: false (which activates the app): a scroll wheel cannot be delivered to a background app.",
+  description: "Scroll an element from get_app_state by pages of its visible size. In the background it moves the enclosing scroll area's scroll bar through accessibility (most native apps); where there is none (web content) it fails background_unavailable — retry with background: false, which activates the app and uses the scroll wheel.",
   inputSchema: {
     app,
     element_index: z.number().int(),
     direction: z.enum(["up", "down", "left", "right"]),
     pages: z.number().optional().describe("Default 1."),
     background,
+    ...postAction,
   },
-}, (input) => run(async () => text(await sky.scroll({ ...input, pages: input.pages ?? 1 }))));
+}, (input) => run(async () => actionContent(await sky.scroll({ ...input, pages: input.pages ?? 1 }))));
 
 server.registerTool("set_value", {
   description: "Set an element's AX value directly (text fields, sliders, checkboxes) without keystrokes. Verified: if the app accepts the write and keeps its old value (a controlled web input), this errors instead of reporting success.",
-  inputSchema: { app, element_index: z.number().int(), value: z.string(), background },
-}, (input) => run(async () => text(await sky.set_value(input))));
+  inputSchema: { app, element_index: z.number().int(), value: z.string(), background, ...postAction },
+}, (input) => run(async () => actionContent(await sky.set_value(input))));
 
 server.registerTool("drag", {
-  description: "Drag from one point to another. Pixels of the latest get_app_state screenshot of `app`, or of the latest `screenshot` when display_id is given (app then optional). Like click, a background drag needs the daemon's background-pointer capabilities.",
+  description: "Drag from one place to another. Each end is an element (from_element_index / to_element_index — the pointer goes to its visible center; preferred, e.g. a file onto a folder) or a point: pixels of the latest get_app_state screenshot of `app`, or of the latest `screenshot` when display_id is given (app then optional). Like click, a background drag needs the daemon's background-pointer capabilities.",
   inputSchema: {
     app: app.optional(),
-    from_x: z.number(), from_y: z.number(), to_x: z.number(), to_y: z.number(),
+    from_element_index: z.number().int().optional(),
+    to_element_index: z.number().int().optional(),
+    from_x: z.number().optional(), from_y: z.number().optional(),
+    to_x: z.number().optional(), to_y: z.number().optional(),
     display_id: z.number().int().optional(),
     mouse_button: z.enum(["left", "right", "middle"]).optional(),
+    modifiers: modifiers.describe("Modifier keys held for the whole drag, e.g. \"alt\" to copy instead of move in Finder."),
     background,
+    ...postAction,
   },
-}, (input) => run(async () => text(await sky.drag(input))));
+}, (input) => run(async () => actionContent(await sky.drag(input))));
 
 server.registerTool("perform_secondary_action", {
   description: "Perform a named AX action on an element, e.g. \"AXShowMenu\" for a context menu (use this instead of right-click in Chromium apps).",
-  inputSchema: { app, element_index: z.number().int(), action: z.string(), background },
-}, (input) => run(async () => text(await sky.perform_secondary_action(input))));
+  inputSchema: { app, element_index: z.number().int(), action: z.string(), background, ...postAction },
+}, (input) => run(async () => actionContent(await sky.perform_secondary_action(input))));
 
 server.registerTool("select_text", {
   description: "Select text inside a text element, or place the caret before/after a match; prefix/suffix disambiguate repeated matches.",
@@ -250,8 +329,79 @@ server.registerTool("select_text", {
     suffix: z.string().optional(),
     selection_type: z.enum(["select", "cursor_before", "cursor_after"]).optional().describe("Default select."),
     background,
+    ...postAction,
   },
-}, (input) => run(async () => text(await sky.select_text({ ...input, selection_type: input.selection_type ?? "select" }))));
+}, (input) => run(async () => actionContent(await sky.select_text({ ...input, selection_type: input.selection_type ?? "select" }))));
+
+server.registerTool("menu_select", {
+  description: "Choose a menu bar command by its title path, e.g. [\"File\", \"Export As…\"] or [\"Format\", \"Font\", \"Bold\"]. An accessibility press: no menu opens on screen and the app need not be in front. More reliable than a keyboard shortcut. A wrong title errors with the titles available at that level.",
+  inputSchema: {
+    app,
+    path: z.array(z.string()).min(2).describe("Menu titles from the menu bar down. Case-insensitive; \"...\" matches \"…\"."),
+    background,
+    ...postAction,
+  },
+}, (input) => run(async () => actionContent(await sky.menu_select(input))));
+
+server.registerTool("open_app", {
+  description: "Launch an app that is not running (or bring up one that is), optionally opening a URL or file with it, and wait until it has finished launching. Then get_app_state it. Launches in the background by default (the user's frontmost app stays in front).",
+  inputSchema: {
+    app: z.string().describe("App name as in /Applications (\"Preview\"), bundle id, or path of an .app."),
+    url: z.string().optional().describe("A URL or absolute file path to open with it. Needs the app's full tier."),
+    background,
+  },
+}, (input) => run(async () => text(await sky.open_app(input))));
+
+server.registerTool("find", {
+  description: "Find elements by role and/or text without reading the whole tree — far cheaper than get_app_state on a big window. Returns matching lines with live element indices (act on them directly) and their labelled ancestors.",
+  inputSchema: {
+    app,
+    role: z.string().optional().describe("AX role, with or without \"AX\": \"button\", \"AXTextField\", \"row\". Case-insensitive."),
+    text: z.string().optional().describe("Case-insensitive substring of the element's label or value."),
+    window_id: z.number().int().optional(),
+    root_element_index: z.number().int().optional().describe("Search only this element's subtree."),
+    max_results: z.number().int().positive().optional().describe("Default 50."),
+    max_depth: z.number().int().positive().optional(),
+    max_nodes: z.number().int().positive().optional(),
+  },
+  annotations: { readOnlyHint: true },
+}, (input) => run(async () => {
+  const result = await sky.find(input);
+  return foundContent(result.matches, result.truncated ? " (more matched; narrow the query or raise max_results)" : "");
+}));
+
+server.registerTool("wait_for", {
+  description: "Wait until an element appears (role/text), a window titled like window_title exists, or — with gone: true — they disappear; and/or until the tree stops changing (stable: true). Polls in the daemon, so one call replaces a capture loop. Fails with timeout (and what it last saw) if the condition never holds.",
+  inputSchema: {
+    app,
+    role: z.string().optional(),
+    text: z.string().optional(),
+    window_title: z.string().optional().describe("Case-insensitive substring of a window title."),
+    gone: z.boolean().optional().describe("Wait until nothing matches (a spinner went away, a sheet closed)."),
+    stable: z.boolean().optional().describe("Wait until the tree is unchanged between two polls (content done loading)."),
+    timeout_ms: z.number().int().optional().describe("Default 5000, max 25000."),
+    window_id: z.number().int().optional(),
+    root_element_index: z.number().int().optional(),
+  },
+  annotations: { readOnlyHint: true },
+}, (input) => run(async () => {
+  const result = await sky.wait_for(input);
+  return foundContent(result.matches, ` after ${result.elapsed_ms}ms`);
+}));
+
+server.registerTool("batch", {
+  description: "Run several steps in order in one call, e.g. click a field → type_text → press_key Return (with return_state on the last step to see the result). Steps are {method, params} with the same params as the matching tool. Allowed: the actions, get_app_state, list_windows, find, wait_for, read/write_clipboard. Stops at the first failure unless stop_on_error is false. At most 50 steps, and no step starts after ~22s (waits inside get only the remaining time).",
+  inputSchema: {
+    steps: z.array(z.object({
+      method: z.string(),
+      params: z.record(z.string(), z.unknown()).optional(),
+    })).min(1).max(50),
+    stop_on_error: z.boolean().optional(),
+  },
+}, (input) => run(async () => batchContent(await sky.batch({
+  steps: input.steps.map((s) => ({ method: s.method, params: normalizeStep(s.method, s.params) })),
+  stop_on_error: input.stop_on_error,
+}))));
 
 server.registerTool("list_displays", {
   description: "Attached displays: display_id, size in points, global origin, backing scale, is_main.",

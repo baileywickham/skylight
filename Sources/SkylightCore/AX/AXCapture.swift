@@ -54,6 +54,12 @@ struct LiveAXNode: TreeNode {
         if let n = raw as? NSNumber { return n.stringValue }
         return nil
     }
+    var searchValue: String? {
+        let raw: CFTypeRef? = axAttribute(element, kAXValueAttribute)
+        if let s = raw as? String { return s }
+        if let n = raw as? NSNumber { return n.stringValue }
+        return nil
+    }
     var children: [any TreeNode] {
         let kids: [AXUIElement] = (axAttribute(element, kAXChildrenAttribute) as CFArray?)
             .map { cfArray -> [AXUIElement] in
@@ -241,6 +247,82 @@ public final class AXCapture {
         try resolveTarget(of: app).surface
     }
 
+    /// Chromium/Electron apps expose an empty tree until an assistive client
+    /// flips these; harmless for apps that ignore them. Done on an app's first
+    /// walk only; returns true when this call just did it. (The set return
+    /// codes cannot identify Chromium — verified live: Chrome rejects both
+    /// sets just like TextEdit yet still honors them — so callers gate their
+    /// web-area retry only on this being the first walk.)
+    private func enableIfNeeded(appElement: AXUIElement, state s: AppCaptureState) -> Bool {
+        guard !s.enablementDone else { return false }
+        AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        s.enablementDone = true
+        usleep(300_000) // settle before the first real walk
+        return true
+    }
+
+    /// The node a walk starts from and the surface it belongs to.
+    private func resolveRoot(app: NSRunningApplication, appElement: AXUIElement, windowID: Int?,
+                             rootIndex: Int?) throws -> (root: any TreeNode, target: CaptureTarget) {
+        let target: CaptureTarget
+        if let id = windowID {
+            guard let match = try windowListings(of: app).first(where: { $0.info.window_id == id }) else {
+                throw SkyServiceError(code: .noFocusedWindow,
+                                      message: "window_id \(id) not found for '\(app.localizedName ?? "app")' — call list_windows for current ids")
+            }
+            target = .window(match.element)
+        } else {
+            target = try resolveTarget(of: app)
+        }
+        // Menu-bar apps serialize from a synthetic root spanning the status
+        // item AND the popover — the popover is a detached AX subtree, so a
+        // single-element root would show one or the other, never both.
+        var root: any TreeNode
+        switch target {
+        case .window(let w): root = LiveAXNode(element: w)
+        case .menuBar(let t): root = MenuBarAppRoot(appElement: appElement, target: t)
+        }
+        // Resolved against the PREVIOUS capture's index set, before this walk
+        // reassigns it — the caller picked the index off the tree we last sent.
+        if let rootIndex {
+            root = LiveAXNode(element: try element(forIndex: rootIndex, appPid: app.processIdentifier))
+        }
+        return (root, target)
+    }
+
+    /// Searches a window (or one element's subtree) for elements matching
+    /// `query`, assigning the same sticky indices a capture would, so every
+    /// match can be acted on directly. Does not touch the diff baseline: the
+    /// caller has not seen a tree, only these matches.
+    public func find(app: NSRunningApplication, windowID: Int? = nil, rootIndex: Int? = nil,
+                     query: ElementQuery, caps overrideCaps: TreeCaps? = nil,
+                     limit: Int = defaultFindResults) throws -> FindOutcome {
+        guard Permissions.status().accessibility else {
+            let instructions = Permissions.instructions(
+                for: PermissionStatus(accessibility: false, screen_recording: true))
+            throw SkyServiceError(code: .permissionDenied, message: instructions.joined(separator: " "))
+        }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
+        let s = state(for: app.processIdentifier)
+        let justEnabled = enableIfNeeded(appElement: appElement, state: s)
+        let (root, _) = try resolveRoot(app: app, appElement: appElement, windowID: windowID, rootIndex: rootIndex)
+        let caps = overrideCaps ?? self.caps
+        var outcome = findElements(root: root, query: query, map: s.map, caps: caps, limit: limit)
+        // Same cold-Chromium budget as capture: right after enablement the web
+        // content may not be published yet.
+        if justEnabled {
+            let deadline = Date().addingTimeInterval(webAreaRetrySeconds)
+            while !outcome.lines.contains(where: { $0.contains("AXWebArea") }), Date() < deadline {
+                usleep(500_000)
+                outcome = findElements(root: root, query: query, map: s.map, caps: caps, limit: limit)
+            }
+        }
+        if outcome.lines.contains(where: { $0.contains("AXWebArea") }) { s.hadWebArea = true }
+        return outcome
+    }
+
     /// Capture with diff-by-default (Milestone 2): when a previous capture of
     /// the same app exists and `disableDiff == false`, returns only the
     /// added/removed/changed lines keyed by sticky index; otherwise the full
@@ -274,44 +356,10 @@ public final class AXCapture {
         AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
 
         let s = state(for: pid)
-        var enablementJustApplied = false
-        if !s.enablementDone {
-            // Chromium/Electron apps expose an empty tree until an assistive
-            // client flips these; harmless for apps that ignore them. (The set
-            // return codes cannot identify Chromium — verified live: Chrome
-            // rejects both sets just like TextEdit yet still honors them — so
-            // the retry below is gated only on this being the first capture.)
-            AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-            AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
-            s.enablementDone = true
-            enablementJustApplied = true
-            usleep(300_000) // settle before the first real walk
-        }
-
-        let target: CaptureTarget
-        if let id = windowID {
-            guard let match = try windowListings(of: app).first(where: { $0.info.window_id == id }) else {
-                throw SkyServiceError(code: .noFocusedWindow,
-                                      message: "window_id \(id) not found for '\(app.localizedName ?? "app")' — call list_windows for current ids")
-            }
-            target = .window(match.element)
-        } else {
-            target = try resolveTarget(of: app)
-        }
-        // Menu-bar apps serialize from a synthetic root spanning the status
-        // item AND the popover — the popover is a detached AX subtree, so a
-        // single-element root would show one or the other, never both.
+        let enablementJustApplied = enableIfNeeded(appElement: appElement, state: s)
+        let (root, target) = try resolveRoot(app: app, appElement: appElement, windowID: windowID,
+                                             rootIndex: rootIndex)
         let window = target.surface
-        var root: any TreeNode
-        switch target {
-        case .window(let w): root = LiveAXNode(element: w)
-        case .menuBar(let t): root = MenuBarAppRoot(appElement: appElement, target: t)
-        }
-        // Resolved against the PREVIOUS capture's index set, before this walk
-        // reassigns it — the caller picked the index off the tree we last sent.
-        if let rootIndex {
-            root = LiveAXNode(element: try element(forIndex: rootIndex, appPid: pid))
-        }
         let currentWindowID = axWindowID(of: window).map { Int($0) }
         let geometry = try captureGeometry(for: window)
         let caps = overrideCaps ?? self.caps
@@ -409,6 +457,21 @@ public final class AXCapture {
         s.previousWindowID = result.windowID
         s.previousScope = result.scope
         s.latestGeometry = result.geometry
+    }
+
+    /// Commits only the tree of a capture that returned no screenshot (an
+    /// action's `return_state`). The click geometry must keep describing the
+    /// last IMAGE the caller received — coordinates are pixels of that image —
+    /// so it is left alone, and so is the window it belongs to. When the
+    /// capture came from a different window than that one, nothing is
+    /// committed: the next get_app_state then returns a full tree, which is
+    /// costlier but never wrong.
+    public func commitTreeBaseline(_ result: CaptureResult, forPid pid: pid_t) {
+        let s = state(for: pid)
+        guard s.previousLines == nil || s.previousWindowID == result.windowID else { return }
+        s.previousLines = result.lines
+        s.previousWindowID = result.windowID
+        s.previousScope = result.scope
     }
 
     /// True when a committed diff baseline exists for `pid` — lets tests

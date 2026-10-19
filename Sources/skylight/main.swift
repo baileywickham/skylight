@@ -231,6 +231,12 @@ func usage() {
     Approvals: 'skylight approve <app>' switches actuation to an allowlist
     ('skylight approvals' to inspect, 'skylight allow-all' to reset). Unlisted
     apps fail with approval_required.
+
+    Tiers: an approved app is driven at tier read (capture only), click (plain
+    clicks, hover, scroll — no typing, keys, drags or menus) or full.
+    Terminals, editors and script runners default to click, because typing
+    there runs commands; 'skylight tier <app> <read|click|full>' overrides one
+    app without touching the allowlist ('skylight tier <app> default' clears it).
     """)
 }
 
@@ -243,11 +249,34 @@ func showApprovals() {
     if cfg.mode != "allowlist" {
         print("  (allow_all: every app may be actuated; 'skylight approve <app>' to lock down)")
     }
+    for (app, tier) in (cfg.tiers ?? [:]).sorted(by: { $0.key < $1.key }) {
+        print("  tier: \(app) = \(tier.rawValue)")
+    }
+    print("default tier click: \(defaultClickTierBundleIDs.joined(separator: ", "))")
+    print("  (a trailing '.' matches every bundle id with that prefix; everything else defaults to full)")
+}
+
+func setTier(_ name: String, _ value: String) {
+    let approvals = Approvals()
+    var cfg = editableApprovals(approvals)
+    var tiers = cfg.tiers ?? [:]
+    // One entry per app, whatever case it was written in before.
+    for key in tiers.keys where key.lowercased() == name.lowercased() { tiers[key] = nil }
+    if value.lowercased() != "default" {
+        guard let tier = ApprovalTier(rawValue: value.lowercased()) else {
+            print("usage: skylight tier <app-name-or-bundle-id> <read|click|full|default>")
+            exit(2)
+        }
+        tiers[name] = tier
+    }
+    cfg.tiers = tiers.isEmpty ? nil : tiers
+    writeApprovals(cfg, to: approvals.fileURL)
+    print(value.lowercased() == "default" ? "cleared the tier for '\(name)'" : "tier for '\(name)' = \(value.lowercased())")
 }
 
 func approve(_ name: String) {
     let approvals = Approvals()
-    var cfg = approvals.load()
+    var cfg = editableApprovals(approvals)
     cfg.mode = "allowlist"
     if !cfg.allow.contains(where: { $0.lowercased() == name.lowercased() }) {
         cfg.allow.append(name)
@@ -258,8 +287,20 @@ func approve(_ name: String) {
 
 func allowAll() {
     let approvals = Approvals()
-    writeApprovals(ApprovalsConfig(mode: "allow_all", allow: []), to: approvals.fileURL)
-    print("approvals reset: allow_all")
+    // Tiers are a separate decision from the allowlist; keep them.
+    writeApprovals(ApprovalsConfig(mode: "allow_all", allow: [], tiers: editableApprovals(approvals).tiers), to: approvals.fileURL)
+    print("approvals reset: allow_all (per-app tiers kept)")
+}
+
+/// The approvals file to modify, refusing a file that exists but does not
+/// decode — writing over it would erase the user's allowlist.
+func editableApprovals(_ approvals: Approvals) -> ApprovalsConfig {
+    do {
+        return try approvals.loadForEditing() ?? ApprovalsConfig(mode: "allow_all", allow: [])
+    } catch {
+        print("error: \(approvals.fileURL.path) does not parse (\(error)); fix or remove it first — not overwriting it")
+        exit(1)
+    }
 }
 
 func writeApprovals(_ cfg: ApprovalsConfig, to url: URL) {
@@ -289,8 +330,15 @@ case "approve":
     }
     approve(name)
 case "allow-all": allowAll()
+case "tier":
+    let rest = Array(CommandLine.arguments.dropFirst(2))
+    guard rest.count == 2 else {
+        print("usage: skylight tier <app-name-or-bundle-id> <read|click|full|default>")
+        exit(2)
+    }
+    setTier(rest[0], rest[1])
 case "background": background(CommandLine.arguments.dropFirst(2).first)
 default:
-    print("usage: skylight <start|register|unregister|doctor|usage|approvals|approve <app>|allow-all|background [on|off|auto]>")
+    print("usage: skylight <start|register|unregister|doctor|usage|approvals|approve <app>|allow-all|tier <app> <tier>|background [on|off|auto]>")
     exit(2)
 }

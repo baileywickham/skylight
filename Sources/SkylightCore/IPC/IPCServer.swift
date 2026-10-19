@@ -6,6 +6,10 @@ public enum IPCError: Error, Equatable {
     case bindFailed(Int32)
     case listenFailed(Int32)
     case alreadyRunning
+    /// The socket path does not fit in sockaddr_un.sun_path (103 bytes plus
+    /// the terminator). Binding it anyway would silently bind a truncated path
+    /// that no client looks for.
+    case pathTooLong(String)
 }
 
 /// Unix-domain-socket server speaking one JSON object per line.
@@ -54,6 +58,9 @@ public final class IPCServer {
     }
 
     public func start() throws {
+        guard socketPath.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path) else {
+            throw IPCError.pathTooLong(socketPath)
+        }
         try Self.removeStaleSocket(at: socketPath)
         let dir = (socketPath as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)

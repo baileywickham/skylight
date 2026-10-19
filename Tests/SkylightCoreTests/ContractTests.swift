@@ -40,6 +40,11 @@ final class ContractTests: XCTestCase {
             case "zoom": _ = try request.decodeParams(ZoomInput.self)
             case "write_clipboard": _ = try request.decodeParams(WriteClipboardInput.self)
             case "bring_to_active_space": _ = try request.decodeParams(BringToActiveSpaceInput.self)
+            case "open_app": _ = try request.decodeParams(OpenAppInput.self)
+            case "find": _ = try request.decodeParams(FindInput.self)
+            case "wait_for": _ = try request.decodeParams(WaitForInput.self)
+            case "menu_select": _ = try request.decodeParams(MenuSelectInput.self)
+            case "batch": _ = try request.decodeParams(BatchInput.self)
             default: XCTFail("unhandled method \(req.method)")
             }
         }
@@ -59,9 +64,23 @@ final class ContractTests: XCTestCase {
             case "ZoomResult": _ = try JSONDecoder().decode(ZoomResult.self, from: data)
             case "ClipboardResult": _ = try JSONDecoder().decode(ClipboardResult.self, from: data)
             case "BringToActiveSpaceResult": _ = try JSONDecoder().decode(BringToActiveSpaceResult.self, from: data)
+            case "OpenAppResult": _ = try JSONDecoder().decode(OpenAppResult.self, from: data)
+            case "FindResult": _ = try JSONDecoder().decode(FindResult.self, from: data)
+            case "WaitForResult": _ = try JSONDecoder().decode(WaitForResult.self, from: data)
+            case "BatchResult": _ = try JSONDecoder().decode(BatchResult.self, from: data)
             default: XCTFail("unhandled result type \(resp.decodes_to)")
             }
         }
+    }
+
+    /// Every action accepts return_state on top of its own input; it must
+    /// decode from the same params without the action's type knowing about it.
+    func testPostActionParamsDecodeFromAnyActionsParams() throws {
+        let request = try JSONDecoder().decode(Request.self, from: Data(
+            #"{"id":1,"method":"click","params":{"app":"Notes","element_index":12,"return_state":true}}"#.utf8))
+        XCTAssertEqual(try request.decodeParams(PostActionParams.self),
+                       PostActionParams(app: "Notes", return_state: true))
+        XCTAssertEqual(try request.decodeParams(ClickInput.self).element_index, 12)
     }
 
     /// Task 2 review noted `.null`/`.number`/`.string`/`.array` lacked direct round-trip

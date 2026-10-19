@@ -85,22 +85,101 @@ func handle<I: Decodable, O: Encodable>(
     }
 }
 
-/// Actuation variant: also writes the audit log line.
+/// Captures an app's tree (and, when asked, its screenshot) and commits it as
+/// the diff baseline — get_app_state, and an action's `return_state`.
+func captureAppState(_ input: GetAppStateInput, includeScreenshot: Bool = true) throws -> AppState {
+    let app = try registry.resolve(input.app)
+    let captured = try axCapture.capture(app: app, windowID: input.window_id,
+                                         disableDiff: input.disableDiff ?? false,
+                                         caps: TreeCaps.standard.overridden(maxDepth: input.max_depth,
+                                                                            maxNodes: input.max_nodes),
+                                         rootIndex: input.root_element_index)
+    guard includeScreenshot else {
+        axCapture.commitTreeBaseline(captured, forPid: app.processIdentifier)
+        return AppState(text: captured.text, screenshot: nil, diffed: captured.diffed)
+    }
+    // AX-only fallback: a failed screenshot (Screen Recording ungranted or
+    // lapsed — macOS 15 re-prompts periodically — or a transient SCK error)
+    // degrades the response instead of failing it; the model still gets the
+    // tree, so the diff baseline below still commits (I1's invariant is
+    // "never advance past a tree the model never saw" — it saw this one).
+    var shot: ScreenshotResult?
+    var shotError: String?
+    do {
+        shot = try awaitResult {
+            try await screenshotter.capture(window: captured.window,
+                                            includeDataURL: input.include_data_url ?? false,
+                                            maxDimension: input.max_dimension)
+        }
+    } catch let error as SkyServiceError {
+        shotError = "\(error.code.rawValue): \(error.message)"
+    } catch {
+        // SCK/Cocoa errors are not SkyServiceError — normalize so a transient
+        // ScreenCaptureKit failure also degrades to AX-only instead of failing.
+        shotError = "capture_failed: \(error)"
+    }
+    // The click geometry must describe the image the model got: a
+    // max_dimension downscale changes pixels-per-point, so commit the scale
+    // the screenshot actually came back at (window origin is unchanged).
+    var committed = captured
+    if let scale = shot?.scale, scale != captured.geometry.scale {
+        committed = CaptureResult(text: captured.text, lines: captured.lines, window: captured.window,
+                                  geometry: CaptureGeometry(windowOriginX: captured.geometry.windowOriginX,
+                                                            windowOriginY: captured.geometry.windowOriginY,
+                                                            scale: scale),
+                                  windowID: captured.windowID, diffed: captured.diffed, scope: captured.scope)
+    }
+    axCapture.commitBaseline(committed, forPid: app.processIdentifier)
+    return AppState(text: captured.text, screenshot: shot,
+                    screenshot_error: shotError, diffed: captured.diffed)
+}
+
+/// Screenshot size for an action's `return_screenshot`: the MCP server's
+/// default, so the image and its click geometry match what get_app_state
+/// would have produced there.
+let returnScreenshotMaxDimension = env["SKYLIGHT_MCP_MAX_DIMENSION"].flatMap(Int.init) ?? 1568
+
+/// Actuation variant: also writes the audit log line, and honors the
+/// `return_state` every action accepts (see PostActionParams).
 func actuation<I: Decodable>(
     _ method: String,
     _ input: I.Type,
     target: @escaping (I) -> String,
     _ body: @escaping (I) throws -> ActionResult
 ) -> (Request) -> Response {
-    handle(method, I.self) { decoded in
-        do {
-            let result = try body(decoded)
-            auditLog.record(method: method, target: target(decoded), outcome: "ok")
-            return result
-        } catch let error as SkyServiceError {
-            auditLog.record(method: method, target: target(decoded), outcome: "error:\(error.code.rawValue)")
-            throw error
-        }
+    { req in
+        handle(method, I.self) { decoded in
+            // Strict: a malformed return_state ("true" as a string) is an
+            // error, not a request that silently returns no state.
+            let post = try req.decodeParams(PostActionParams.self)
+            let wantsState = post.return_state == true || post.return_screenshot == true
+            // Refused before acting: once the action has run, an error would
+            // read as if it had not.
+            if wantsState, post.app == nil {
+                throw SkyServiceError(code: .invalidParams, message: "\(method): return_state needs app")
+            }
+            let result: ActionResult
+            do {
+                result = try body(decoded)
+                auditLog.record(method: method, target: target(decoded), outcome: "ok")
+            } catch let error as SkyServiceError {
+                auditLog.record(method: method, target: target(decoded), outcome: "error:\(error.code.rawValue)")
+                throw error
+            }
+            guard wantsState, let app = post.app else { return result }
+            let withShot = post.return_screenshot == true
+            do {
+                let state = try captureAppState(
+                    GetAppStateInput(app: app, include_data_url: withShot ? true : nil,
+                                     max_dimension: withShot ? returnScreenshotMaxDimension : nil),
+                    includeScreenshot: withShot)
+                return ActionResult(done: result.done, state: state)
+            } catch let error as SkyServiceError {
+                return ActionResult(done: result.done, state_error: "\(error.code.rawValue): \(error.message)")
+            } catch {
+                return ActionResult(done: result.done, state_error: "capture_failed: \(error)")
+            }
+        }(req)
     }
 }
 
@@ -137,48 +216,26 @@ router.register("list_windows", handle("list_windows", ListWindowsInput.self) { 
     return ListWindowsResult(windows: try axCapture.windowListings(of: app).map(\.info))
 })
 router.register("get_app_state", handle("get_app_state", GetAppStateInput.self) { input in
-    let app = try registry.resolve(input.app)
-    let captured = try axCapture.capture(app: app, windowID: input.window_id,
-                                         disableDiff: input.disableDiff ?? false,
-                                         caps: TreeCaps.standard.overridden(maxDepth: input.max_depth,
-                                                                            maxNodes: input.max_nodes),
-                                         rootIndex: input.root_element_index)
-    // AX-only fallback: a failed screenshot (Screen Recording ungranted or
-    // lapsed — macOS 15 re-prompts periodically — or a transient SCK error)
-    // degrades the response instead of failing it; the model still gets the
-    // tree, so the diff baseline below still commits (I1's invariant is
-    // "never advance past a tree the model never saw" — it saw this one).
-    var shot: ScreenshotResult?
-    var shotError: String?
-    do {
-        shot = try awaitResult {
-            try await screenshotter.capture(window: captured.window,
-                                            includeDataURL: input.include_data_url ?? false,
-                                            maxDimension: input.max_dimension)
-        }
-    } catch let error as SkyServiceError {
-        shotError = "\(error.code.rawValue): \(error.message)"
-    } catch {
-        // SCK/Cocoa errors are not SkyServiceError — normalize so a transient
-        // ScreenCaptureKit failure also degrades to AX-only instead of failing.
-        shotError = "capture_failed: \(error)"
-    }
-    // The click geometry must describe the image the model got: a
-    // max_dimension downscale changes pixels-per-point, so commit the scale
-    // the screenshot actually came back at (window origin is unchanged).
-    var committed = captured
-    if let scale = shot?.scale, scale != captured.geometry.scale {
-        committed = CaptureResult(text: captured.text, lines: captured.lines, window: captured.window,
-                                  geometry: CaptureGeometry(windowOriginX: captured.geometry.windowOriginX,
-                                                            windowOriginY: captured.geometry.windowOriginY,
-                                                            scale: scale),
-                                  windowID: captured.windowID, diffed: captured.diffed)
-    }
-    axCapture.commitBaseline(committed, forPid: app.processIdentifier)
+    let state = try captureAppState(input)
     auditLog.record(method: "get_app_state", target: input.app,
-                    outcome: shotError == nil ? "ok" : "ok-ax-only")
-    return AppState(text: captured.text, screenshot: shot,
-                    screenshot_error: shotError, diffed: captured.diffed)
+                    outcome: state.screenshot_error == nil ? "ok" : "ok-ax-only")
+    return state
+})
+router.register("find", handle("find", FindInput.self) { input in
+    let query = ElementQuery(role: input.role, text: input.text)
+    guard !query.isEmpty else {
+        throw SkyServiceError(code: .invalidParams, message: "find needs role and/or text")
+    }
+    let app = try registry.resolve(input.app)
+    let outcome = try axCapture.find(app: app, windowID: input.window_id, rootIndex: input.root_element_index,
+                                     query: query,
+                                     caps: TreeCaps.standard.overridden(maxDepth: input.max_depth,
+                                                                        maxNodes: input.max_nodes),
+                                     limit: findResultLimit(input.max_results))
+    return FindResult(matches: outcome.matches, truncated: outcome.truncated)
+})
+router.register("wait_for", handle("wait_for", WaitForInput.self) { input in
+    try waitFor(input, app: try registry.resolve(input.app), capture: axCapture)
 })
 router.register("click", actuation("click", ClickInput.self,
     target: {
@@ -201,12 +258,73 @@ router.register("scroll", actuation("scroll", ScrollInput.self,
 router.register("set_value", actuation("set_value", SetValueInput.self,
     target: { "\($0.app)[\($0.element_index)]" }, actuator.setValue))
 router.register("drag", actuation("drag", DragInput.self,
-    target: { "\($0.app ?? "<implicit>") (\($0.from_x),\($0.from_y))->(\($0.to_x),\($0.to_y))\($0.display_id.map { " display:\($0)" } ?? "")" },
+    target: { input in
+        func end(_ index: Int?, _ x: Double?, _ y: Double?) -> String {
+            index.map { "[\($0)]" } ?? "(\(x ?? -1),\(y ?? -1))"
+        }
+        return "\(input.app ?? "<implicit>") \(end(input.from_element_index, input.from_x, input.from_y))->"
+            + "\(end(input.to_element_index, input.to_x, input.to_y))\(input.display_id.map { " display:\($0)" } ?? "")"
+    },
     actuator.drag))
 router.register("perform_secondary_action", actuation("perform_secondary_action", PerformSecondaryActionInput.self,
     target: { "\($0.app)[\($0.element_index)] \($0.action)" }, actuator.performSecondaryAction))
 router.register("select_text", actuation("select_text", SelectTextInput.self,
     target: { "\($0.app)[\($0.element_index)]" }, actuator.selectText))
+router.register("menu_select", actuation("menu_select", MenuSelectInput.self,
+    target: { "\($0.app) \($0.path.joined(separator: " > "))" }, actuator.menuSelect))
+router.register("open_app", handle("open_app", OpenAppInput.self) { input in
+    do {
+        let result = try actuator.openApp(input)
+        auditLog.record(method: "open_app", target: "\(input.app)\(input.url.map { " url=\($0)" } ?? "")",
+                        outcome: result.launched ? "launched" : "running")
+        return result
+    } catch let error as SkyServiceError {
+        auditLog.record(method: "open_app", target: input.app, outcome: "error:\(error.code.rawValue)")
+        throw error
+    }
+})
+
+// Batch: several steps in one request, run in order inside one scheduling
+// slot (see classifyRequest). Each step goes through the router exactly like
+// a request of its own — same validation, approvals, pause file and audit
+// line — so a batch can do nothing its steps could not do one at a time.
+router.register("batch", handle("batch", BatchInput.self) { input in
+    guard !input.steps.isEmpty, input.steps.count <= RequestClassifier.maxBatchSteps else {
+        throw SkyServiceError(code: .invalidParams,
+                              message: "batch needs 1...\(RequestClassifier.maxBatchSteps) steps (got \(input.steps.count))")
+    }
+    // Every step is checked before any runs, so a typo in step 5 does not
+    // leave steps 1–4 done.
+    if let bad = input.steps.first(where: { !RequestClassifier.batchableMethods.contains($0.method) }) {
+        throw SkyServiceError(code: .invalidParams, message: "batch cannot run '\(bad.method)'")
+    }
+    let stopOnError = input.stop_on_error ?? true
+    let deadline = Date().addingTimeInterval(RequestClassifier.batchBudgetSeconds)
+    var results: [BatchStepResult] = []
+    var stoppedReason: String?
+    for (i, step) in input.steps.enumerated() {
+        let remainingMs = Int(deadline.timeIntervalSinceNow * 1000)
+        guard remainingMs > 0 else {
+            stoppedReason = "time budget (\(Int(RequestClassifier.batchBudgetSeconds))s) used up before step \(i + 1); "
+                + "steps \(i + 1)–\(input.steps.count) were not run"
+            break
+        }
+        var params = step.params
+        // A wait inside the batch may only use what the batch has left.
+        if step.method == "wait_for", case .object(var fields) = params ?? .object([:]) {
+            let asked = fields["timeout_ms"].flatMap { if case .number(let n) = $0 { return Int(n) } else { return nil } }
+            fields["timeout_ms"] = .number(Double(min(waitTimeoutMs(asked), remainingMs)))
+            params = .object(fields)
+        }
+        let response = router.route(Request(id: i, method: step.method, params: params))
+        results.append(BatchStepResult(method: step.method, ok: response.ok,
+                                       result: response.result, error: response.error))
+        if !response.ok && stopOnError { break }
+    }
+    return BatchResult(results: results,
+                       completed: results.count == input.steps.count && results.allSatisfy(\.ok),
+                       stopped_reason: stoppedReason)
+})
 
 // Displays: whole-screen capture (the pixel-based computer-use path), a
 // native-resolution zoom for small text, and the display list that names them.
@@ -305,6 +423,13 @@ struct SchedulingParams: Decodable {
 /// identifier is resolved to a pid HERE so that "Notes" and "com.apple.Notes"
 /// cannot be handed two separate slots for the same app.
 func classifyRequest(_ request: Request) -> RequestClass {
+    if request.method == "batch" {
+        guard let input = try? request.decodeParams(BatchInput.self) else { return .exclusive }
+        return RequestClassifier.classifyBatch(input.steps.map { step in
+            step.method == "batch" ? .exclusive
+                : classifyRequest(Request(id: request.id, method: step.method, params: step.params))
+        })
+    }
     let params = try? request.decodeParams(SchedulingParams.self)
     let appKey = params?.app
         .flatMap { try? registry.resolve($0) }

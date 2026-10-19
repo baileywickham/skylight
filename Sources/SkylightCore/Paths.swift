@@ -1,8 +1,14 @@
 import Foundation
 
 public enum SkylightPaths {
+    /// `SKYLIGHT_SUPPORT_DIR` relocates the socket, approvals, settings and
+    /// shots together, so a dev daemon can run beside the installed one
+    /// without touching its socket or config.
     public static var supportDir: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        if let override = ProcessInfo.processInfo.environment["SKYLIGHT_SUPPORT_DIR"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/skylight")
     }
     public static var socketPath: String {

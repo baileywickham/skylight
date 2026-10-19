@@ -16,7 +16,7 @@ final class RequestClassifierTests: XCTestCase {
     /// Capture never activates an app, so it is per-app regardless of mode —
     /// but it does mutate that app's index map, so it is not free-for-all.
     func testReadOnlyMethodsAreKeyedInBothModes() {
-        for method in ["get_app_state", "list_windows"] {
+        for method in ["get_app_state", "list_windows", "find", "wait_for"] {
             XCTAssertEqual(classify(method, "pid:42", background: false), .keyed("pid:42"), method)
             XCTAssertEqual(classify(method, "pid:42", background: true), .keyed("pid:42"), method)
         }
@@ -80,5 +80,30 @@ final class RequestClassifierTests: XCTestCase {
     /// itself runs alone rather than racing.
     func testUnknownMethodIsExclusive() {
         XCTAssertEqual(classify("teleport", "pid:42", background: true), .exclusive)
+    }
+
+    func testNewActionsFollowTheActionRule() {
+        for method in ["menu_select", "open_app"] {
+            XCTAssertEqual(classify(method, "pid:42", background: true), .keyed("pid:42"), method)
+            XCTAssertEqual(classify(method, "pid:42", background: false), .exclusive, method)
+        }
+        // open_app of an app that is not running yet has no pid to key on.
+        XCTAssertEqual(classify("open_app", nil, background: true), .exclusive)
+    }
+
+    func testBatchTakesItsAppsSlotWhenEveryStepSharesIt() {
+        XCTAssertEqual(RequestClassifier.classifyBatch([.keyed("pid:1"), .keyed("$meta"), .keyed("pid:1")]), .keyed("pid:1"))
+        XCTAssertEqual(RequestClassifier.classifyBatch([.keyed("$meta")]), .keyed("$meta"))
+    }
+
+    func testBatchRunsAloneWhenStepsSpanAppsOrAnyStepIsExclusive() {
+        XCTAssertEqual(RequestClassifier.classifyBatch([.keyed("pid:1"), .keyed("pid:2")]), .exclusive)
+        XCTAssertEqual(RequestClassifier.classifyBatch([.keyed("pid:1"), .exclusive]), .exclusive)
+    }
+
+    func testBatchCannotNestOrRunDaemonMethods() {
+        XCTAssertFalse(RequestClassifier.batchableMethods.contains("batch"))
+        XCTAssertFalse(RequestClassifier.batchableMethods.contains("screenshot"))
+        XCTAssertTrue(RequestClassifier.batchableMethods.isSuperset(of: ["click", "wait_for", "write_clipboard"]))
     }
 }

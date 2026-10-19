@@ -30,9 +30,10 @@ Other commands: `skylight-run --status` (permissions/socket report), `skylight-r
 
 ## Workflow
 
-1. `get_app_state` → read the indexed AX tree (`s.text`) and/or screenshot (`s.screenshot?.url` — may be absent with `s.screenshot_error` set when Screen Recording is ungranted; the AX text still works).
-2. Act by `element_index` (preferred — stable across captures) or screenshot-pixel `x`/`y`.
-3. Re-capture to verify; repeat. Captures after the first return **diffs** by default; pass `disableDiff: true` for the full tree.
+1. `get_app_state` → read the indexed AX tree (`s.text`) and/or screenshot (`s.screenshot?.url` — may be absent with `s.screenshot_error` set when Screen Recording is ungranted; the AX text still works). On a big window, `find({ role, text })` returns just the matching elements, with live indices.
+2. Act by `element_index` (preferred — stable across captures) or screenshot-pixel `x`/`y`. Menu commands: `menu_select({ path: ["File", "Export As…"] })`. App not running: `open_app` first.
+3. Verify: pass `return_state: true` on the action to get the new tree back in the same call, or re-capture. Captures after the first return **diffs** by default; pass `disableDiff: true` for the full tree. To wait for something to appear, disappear or finish loading, use `wait_for` — not a capture loop.
+4. Several steps in a row (click field → type → Return): one `batch` call.
 
 ## API quick reference
 
@@ -43,13 +44,18 @@ All methods take `app` (app name, e.g. `"Finder"`). Full types: `$(skylight-run 
 | `list_apps` | `include_menu_bar_apps?` (also list accessory/LSUIElement apps, tagged `menu_bar_only`) |
 | `list_windows` | — (windows with `window_id`, `title`, `is_focused`) |
 | `get_app_state` | `disableDiff?`, `window_id?` (from `list_windows`), `include_data_url?`, `max_depth?`/`max_nodes?` (tree caps, default 60/5000 — raise when a line says "truncated … raise with max_depth"), `root_element_index?` (capture just that element's subtree — one pane of a big Electron window, so an unrelated webview stays out of the tree and the diff) |
-| `click` | `element_index` OR `x`,`y` (screenshot px); `display_id?` makes x/y pixels of the latest `screenshot` (then `app` is optional — hit-tested); `mouse_button?`, `click_count?`, `hover?` (default true: move the pointer there first). Background coordinate clicks work (native and web alike) as long as `skylight doctor` shows `bg mouse events: available` and `focus w/o raise: available`; without those they fail `background_unavailable`, so click by `element_index` (no focus needed) or pass `background: false` |
+| `open_app` | `app` (name as in /Applications, bundle id, or .app path — need not be running), `url?` (URL or absolute file path to open with it), `background?` — waits until launched; returns `launched: false` if it was already running |
+| `find` | `role?` (`"button"` = `"AXButton"`), `text?` (substring of label or value, case-insensitive), `window_id?`, `root_element_index?`, `max_results?` (50) — matching elements only, each with a live `element_index` and its labelled `ancestors` |
+| `wait_for` | `role?`/`text?` (an element appears), `window_title?` (a window appears), `gone?` (…or disappears), `stable?` (tree stops changing), `timeout_ms?` (5000, max 25000) — throws `timeout` saying what it last saw |
+| `menu_select` | `path` (titles from the menu bar down, e.g. `["Format", "Font", "Bold"]`; `"..."` matches `"…"`) — AX press, no menu opens on screen; a wrong title errors with the titles available at that level |
+| `batch` | `steps: [{ method, params }]` (≤ 50; actions, `get_app_state`, `list_windows`, `find`, `wait_for`, clipboard), `stop_on_error?` (default true) — one round trip; put `return_state: true` on the last step |
+| `click` | `element_index` OR `x`,`y` (screenshot px); `display_id?` makes x/y pixels of the latest `screenshot` (then `app` is optional — hit-tested); `mouse_button?`, `click_count?`, `hover?` (default true: move the pointer there first), `modifiers?` (`"cmd"`, `"shift"`, `"cmd+shift"`… — Cmd-click to add to a selection; with `element_index` it becomes a pointer click at the element's center). Background coordinate clicks work (native and web alike) as long as `skylight doctor` shows `bg mouse events: available` and `focus w/o raise: available`; without those they fail `background_unavailable`, so click by `element_index` (no focus needed) or pass `background: false` |
 | `hover` | `element_index` OR `x`,`y` (same targeting as `click`); `settle_ms?` — park the pointer WITHOUT clicking, so hover-only UI renders. Works with the app in the background (it is made active without being raised); a hover into a NON-KEY window of that app is still dropped |
 | `press_key` | `keys`: X-keysym chord, e.g. `"Cmd+s"`, `"Ctrl+Shift+t"`, `"Return"`; `repeat?` (send it N times in one call, max 200); `app` optional (frontmost) |
 | `type_text` | `text`; `element_index?` (focus that field first — without it the text goes wherever focus happens to be); `app` optional (frontmost) |
-| `scroll` | `element_index`, `direction` (up/down/left/right), `pages` — needs `background: false`; a scroll wheel cannot be delivered to a background app |
+| `scroll` | `element_index`, `direction` (up/down/left/right), `pages` — in the background it moves the enclosing scroll area's AX scroll bar (most native apps); where there is none (web content) it fails `background_unavailable`, so retry with `background: false` |
 | `set_value` | `element_index`, `value` — read-back verified: a controlled web input that discards the write errors instead of reporting success |
-| `drag` | `from_x`,`from_y`,`to_x`,`to_y` (screenshot px); `display_id?` as for click. A background drag reports `buttons: 0` to web pages, so JS drag libraries read it as a hover — use `background: false` for sliders/canvas |
+| `drag` | each end is `from_element_index`/`to_element_index` (element center — e.g. a file onto a folder) OR `from_x`,`from_y` / `to_x`,`to_y` (screenshot px); `display_id?` as for click; `modifiers?` held throughout (`"alt"` copies in Finder). A background drag reports `buttons: 0` to web pages, so JS drag libraries read it as a hover — use `background: false` for sliders/canvas |
 | `perform_secondary_action` | `element_index`, `action` (e.g. `"AXShowMenu"`) |
 | `select_text` | `element_index`, `text`, `prefix?`, `suffix?`, `selection_type` |
 | `capabilities` | — (TCC grants, private-symbol availability, `parallel_actuation`, `space_management`) |
@@ -59,7 +65,9 @@ All methods take `app` (app name, e.g. `"Finder"`). Full types: `$(skylight-run 
 | `read_clipboard` / `write_clipboard` | — / `text` |
 | `bring_to_active_space` | `app`, `window_id?` — move a window to the current Space without switching |
 
-Every action (`click`, `hover`, `press_key`, `type_text`, `scroll`, `set_value`, `drag`, `perform_secondary_action`, `select_text`) also accepts `background?: boolean` — background is already the default; `false` brings the app to the front first.
+Every action (`click`, `hover`, `press_key`, `type_text`, `scroll`, `set_value`, `drag`, `perform_secondary_action`, `select_text`, `menu_select`) also accepts:
+- `background?: boolean` — background is already the default; `false` brings the app to the front first.
+- `return_state?: boolean` — the result's `state` is the app's tree right after the action (a diff, like `get_app_state`), saving a round trip; needs `app`. `return_screenshot: true` adds the image (and resets click coordinates to it). If the action worked but the capture failed, `state_error` says so — the action still happened.
 
 ## Pixel path (no AX tree, or the whole desktop)
 
@@ -138,7 +146,9 @@ Rules:
 ## Gotchas
 
 - Actions don't steal focus by default — see "Background & parallel work" above. `background: false` activates the app first; the user sets the default with `skylight background on|off|auto`.
-- If an action fails `approval_required`: the actuation allowlist is on — `skylight approve "<App>"` (`skylight` is on PATH with the cask), or `skylight allow-all` to disable the gate.
+- If an action fails `approval_required`, the message says which gate:
+  - not approved at all: the allowlist is on — `skylight approve "<App>"` (`skylight` is on PATH with the cask), or `skylight allow-all` to disable it.
+  - approved at too low a **tier**: apps are driven at `read` (capture only), `click` (plain left clicks, hover, scroll, select text) or `full`. **Terminals, editors and script runners default to `click`** — typing there runs commands, and on-screen text can carry injected instructions. Don't work around it (e.g. by pasting via another app); tell the user, who can run `skylight tier "<App>" full`. `skylight approvals` lists tiers.
 - Coordinates are **screenshot pixels**, not screen points — take them from the screenshot you just captured.
 - `type_text` types at the current focus/caret — `click` the target field first unless the app focuses it for you.
 - Apps may transform typed text (autocorrect, auto-capitalization) — verify by re-capture, not exact string match.

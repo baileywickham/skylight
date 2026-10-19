@@ -31,6 +31,46 @@ public final class AppRegistry {
         return ListAppsResult(apps: apps)
     }
 
+    /// The wire description of one running app.
+    public func info(for app: NSRunningApplication) -> AppInfo {
+        AppInfo(name: app.localizedName ?? "(unnamed)",
+                bundle_id: app.bundleIdentifier,
+                pid: app.processIdentifier,
+                is_frontmost: app.isActive,
+                launch_date: app.launchDate.map(iso8601.string(from:)),
+                menu_bar_only: app.activationPolicy == .accessory ? true : nil)
+    }
+
+    /// Where installed apps live, searched in order by `locateApplication`.
+    public static let applicationDirectories: [URL] = [
+        "/Applications", "/Applications/Utilities", "/System/Applications",
+        "/System/Applications/Utilities", NSHomeDirectory() + "/Applications", "/System/Library/CoreServices",
+    ].map { URL(fileURLWithPath: $0, isDirectory: true) }
+
+    /// The bundle of an installed (not necessarily running) app: an .app path
+    /// as given, else the bundle id via Launch Services, else an app of that
+    /// name (case-insensitive) in `directories`.
+    public func locateApplication(_ identifier: String,
+                                  directories: [URL] = AppRegistry.applicationDirectories) -> URL? {
+        let fm = FileManager.default
+        if identifier.hasSuffix(".app"), identifier.contains("/") {
+            let url = URL(fileURLWithPath: (identifier as NSString).expandingTildeInPath)
+            return fm.fileExists(atPath: url.path) ? url : nil
+        }
+        if identifier.contains("."), !identifier.contains(" "),
+           let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier) {
+            return url
+        }
+        let wanted = identifier.lowercased().hasSuffix(".app") ? identifier.lowercased() : identifier.lowercased() + ".app"
+        for dir in directories {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir.path) else { continue }
+            if let match = entries.first(where: { $0.lowercased() == wanted }) {
+                return dir.appendingPathComponent(match)
+            }
+        }
+        return nil
+    }
+
     /// Resolves an AppIdentifier: exact bundle id first, then display name
     /// (case-insensitive). Regular (Dock) apps win over accessory (menu bar)
     /// apps on a name collision; accessory apps are always resolvable even

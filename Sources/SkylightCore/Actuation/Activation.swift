@@ -227,9 +227,19 @@ public func deliversSyntheticEvents(action: ActuatorAction) -> Bool {
     switch action {
     case .coordinateClick, .pressKey, .typeText, .scroll, .drag, .hover:
         return true
-    case .elementClick, .setValue, .performSecondaryAction, .selectText:
+    case .elementClick, .setValue, .performSecondaryAction, .selectText, .menuSelect:
         return false
     }
+}
+
+/// Whether a background action needs the target AppKit-active (the
+/// focus-without-raise flip): every action that delivers synthetic events, and
+/// `menuSelect` — AppKit validates menu items against the key window, so in an
+/// inactive app every item that acts on a document reads as disabled and a
+/// press on it does nothing (verified live: TextEdit's Format > Font > Bold
+/// and File > Close).
+public func needsAppActive(action: ActuatorAction) -> Bool {
+    deliversSyntheticEvents(action: action) || action == .menuSelect
 }
 
 /// The actions the daemon can perform, split by how they reach the app.
@@ -244,6 +254,7 @@ public enum ActuatorAction: Equatable {
     case drag
     case performSecondaryAction
     case selectText
+    case menuSelect
 }
 
 /// Where a synthesized CGEvent is delivered.

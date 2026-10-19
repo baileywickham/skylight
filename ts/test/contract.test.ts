@@ -4,8 +4,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildRequest } from "../src/client.js";
 import type {
-  ActionResult, AppState, BringToActiveSpaceResult, CapabilitiesResult, ClipboardResult, DisplayScreenshot,
-  ListAppsResult, ListDisplaysResult, ListWindowsResult, ZoomResult,
+  ActionResult, AppState, BatchResult, BringToActiveSpaceResult, CapabilitiesResult, ClipboardResult,
+  DisplayScreenshot, FindResult, ListAppsResult, ListDisplaysResult, ListWindowsResult, OpenAppResult,
+  WaitForResult, ZoomResult,
 } from "../src/types.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -53,6 +54,8 @@ describe("contract", () => {
       } else if (resp.decodes_to === "ActionResult") {
         const r = resp.json as ActionResult;
         expect(typeof r.done).toBe("boolean");
+        if (r.state != null) expect(typeof r.state.text).toBe("string");
+        if (r.state_error != null) expect(typeof r.state_error).toBe("string");
       } else if (resp.decodes_to === "ListDisplaysResult") {
         const r = resp.json as ListDisplaysResult;
         expect(typeof r.displays[0].display_id).toBe("number");
@@ -76,6 +79,26 @@ describe("contract", () => {
         const r = resp.json as BringToActiveSpaceResult;
         expect(typeof r.moved).toBe("boolean");
         expect(typeof r.on_active_space).toBe("boolean");
+      } else if (resp.decodes_to === "OpenAppResult") {
+        const r = resp.json as OpenAppResult;
+        expect(typeof r.app.pid).toBe("number");
+        expect(typeof r.launched).toBe("boolean");
+      } else if (resp.decodes_to === "FindResult") {
+        const r = resp.json as FindResult;
+        expect(typeof r.matches[0].element_index).toBe("number");
+        expect(typeof r.matches[0].line).toBe("string");
+        expect(typeof r.truncated).toBe("boolean");
+      } else if (resp.decodes_to === "WaitForResult") {
+        const r = resp.json as WaitForResult;
+        expect(typeof r.elapsed_ms).toBe("number");
+        expect(Array.isArray(r.matches)).toBe(true);
+      } else if (resp.decodes_to === "BatchResult") {
+        const r = resp.json as BatchResult;
+        expect(typeof r.completed).toBe("boolean");
+        for (const step of r.results) {
+          expect(typeof step.method).toBe("string");
+          expect(step.ok ? step.result !== undefined : typeof step.error?.code === "string").toBe(true);
+        }
       } else {
         throw new Error(`unhandled result type ${resp.decodes_to}`);
       }

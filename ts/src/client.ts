@@ -3,12 +3,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type {
-  ActionResult, AppState, BringToActiveSpaceInput, BringToActiveSpaceResult, CapabilitiesResult,
-  ClickInput, ClipboardResult, DisplayScreenshot, DragInput, GetAppStateInput, HoverInput,
-  ListAppsInput, ListAppsResult, ListDisplaysResult,
-  ListWindowsInput, ListWindowsResult,
+  ActionResult, AppState, BatchInput, BatchResult, BringToActiveSpaceInput, BringToActiveSpaceResult,
+  CapabilitiesResult, ClickInput, ClipboardResult, DisplayScreenshot, DragInput, FindInput, FindResult,
+  GetAppStateInput, HoverInput, ListAppsInput, ListAppsResult, ListDisplaysResult,
+  ListWindowsInput, ListWindowsResult, MenuSelectInput, OpenAppInput, OpenAppResult,
   PerformSecondaryActionInput, PressKeyInput, ScreenshotInput, ScrollInput, SelectTextInput,
-  SetValueInput, TypeTextInput, WriteClipboardInput, ZoomInput, ZoomResult,
+  SetValueInput, TypeTextInput, WaitForInput, WaitForResult, WriteClipboardInput, ZoomInput, ZoomResult,
 } from "./types.js";
 
 // NOTE: shots_dir is intentionally NOT part of SkyConfig: the client never
@@ -199,6 +199,16 @@ export class SkyClient {
     return this.call("perform_secondary_action", input);
   }
   select_text(input: SelectTextInput): Promise<ActionResult> { return this.call("select_text", input); }
+  /** Press a menu item by its title path from the menu bar, e.g. ["File", "Export As…"]. No menu opens on screen. */
+  menu_select(input: MenuSelectInput): Promise<ActionResult> { return this.call("menu_select", input); }
+  /** Launch an app (it need not be running), optionally opening a URL or file with it. */
+  open_app(input: OpenAppInput): Promise<OpenAppResult> { return this.call("open_app", input); }
+  /** Elements matching a role and/or text, with live indices — instead of reading the whole tree. */
+  find(input: FindInput): Promise<FindResult> { return this.call("find", input); }
+  /** Block until an element or window appears (or, with gone, disappears) or the tree settles. Rejects with code "timeout" when it never does. */
+  wait_for(input: WaitForInput): Promise<WaitForResult> { return this.call("wait_for", input); }
+  /** Run several steps in order in one round trip. */
+  batch(input: BatchInput): Promise<BatchResult> { return this.call("batch", input); }
 
   /** Attached displays; ids feed screenshot/zoom/click/drag display_id. */
   list_displays(): Promise<ListDisplaysResult> { return this.call("list_displays", {}); }

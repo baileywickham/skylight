@@ -35,9 +35,10 @@ or `{"id":n,"ok":false,"error":{"code":"<slug>","message":"..."}}`.
     `LineCodec` (1 MiB line cap), `RequestRouter`.
   - `Protocol/` — `Messages` (wire envelopes, `JSONValue`, `SkyErrorCode`),
     `APITypes` (per-method input/output types).
-  - `AX/` — `AXCapture` (live tree walk), `AXIdentity` (CFEqual/CFHash element
+  - `AX/` — `AXCapture` (live tree walk, `find`), `AXIdentity` (CFEqual/CFHash element
     key), `ElementIndexMap` (sticky index↔element map), `AXTreeSerializer`,
-    `AXTreeDiff`, `TreeNode`.
+    `AXTreeDiff`, `TreeNode`, `ElementFinder` (pure `find` walk + query, menu-title
+    and scroll-bar math), `WaitFor` (`wait_for` polling + its pure condition).
   - `Actuation/` — `Actuator` (all actions), `Activation` (foreground raise +
     background focus-without-raise), `SkyLightBridge` (dlsym'd private window
     server symbols), `EventRecord` (the raw activation/key-window records),
@@ -46,7 +47,9 @@ or `{"id":n,"ok":false,"error":{"code":"<slug>","message":"..."}}`.
     `captureDisplay`, region `zoom`, `max_dimension` downscaling),
     `DisplayGeometryStore` (per-display click geometry), `AXWindowBridge`
     (`_AXUIElementGetWindow`).
-  - `Geometry/CoordinateModel`, `AppRegistry`, `Permissions`, `Paths`, `AuditLog`.
+  - `Geometry/CoordinateModel`, `AppRegistry` (running apps + installed-app lookup
+    for `open_app`), `Approvals` (allowlist + per-app tiers read/click/full;
+    terminals/editors default to click), `Permissions`, `Paths`, `AuditLog`.
 - `Sources/SkylightService/main.swift` — the daemon: registers all methods, owns
   the run loop, audit log, kill switch.
 - `Sources/skylight/main.swift` — the `skylight` CLI (`doctor`, `start`, `register`/`unregister`, approvals, `background`, usage).
@@ -73,6 +76,10 @@ server, and that per-app parallelism shows up through a real socket. Run them
 after a macOS upgrade; see `ts/live/README.md`.
 
 ## Running & driving the daemon (dev)
+
+`SKYLIGHT_SUPPORT_DIR=<dir>` moves the socket, approvals, settings and shots,
+so a dev daemon can run beside the installed one. Keep `<dir>` short: the
+socket path must fit in 103 bytes (the daemon refuses a longer one).
 
 ```bash
 swift build && .build/debug/SkylightService &   # this machine's local binary has TCC grants

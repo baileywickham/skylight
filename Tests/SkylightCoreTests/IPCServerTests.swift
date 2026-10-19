@@ -58,6 +58,14 @@ final class IPCServerTests: XCTestCase {
         XCTAssertEqual(resp.result, .object(["pong": .bool(true)]))
     }
 
+    func testOverlongSocketPathIsRefusedNotTruncated() {
+        let path = "/tmp/" + String(repeating: "x", count: 120) + ".sock"
+        let server = IPCServer(socketPath: path, handler: { req in .failure(id: req.id, code: .unknownMethod, message: "") })
+        XCTAssertThrowsError(try server.start()) { error in
+            XCTAssertEqual(error as? IPCError, .pathTooLong(path))
+        }
+    }
+
     func testStaleSocketIsUnlinkedAndRebound() throws {
         let path = tempSocketPath()
         FileManager.default.createFile(atPath: path, contents: nil) // stale file, nobody listening

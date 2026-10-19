@@ -8,5 +8,12 @@ public protocol TreeNode {
     var role: String { get }
     var title: String? { get }
     var value: String? { get }
+    /// The value in full, for searching: `value` is sanitized and capped for
+    /// display, so text past its first 200 characters would be unfindable.
+    var searchValue: String? { get }
     var children: [any TreeNode] { get }
+}
+
+public extension TreeNode {
+    var searchValue: String? { value }
 }
